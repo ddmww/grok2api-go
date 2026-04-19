@@ -40,6 +40,22 @@ func NewConfig(values map[string]any) *config.Service {
 	return service
 }
 
+type CloseNotifyRecorder struct {
+	*httptest.ResponseRecorder
+	notifyCh chan bool
+}
+
+func NewCloseNotifyRecorder() *CloseNotifyRecorder {
+	return &CloseNotifyRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		notifyCh:         make(chan bool, 1),
+	}
+}
+
+func (r *CloseNotifyRecorder) CloseNotify() <-chan bool {
+	return r.notifyCh
+}
+
 type FakeGrokServer struct {
 	Server      *httptest.Server
 	mu          sync.Mutex

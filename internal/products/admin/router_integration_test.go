@@ -159,7 +159,7 @@ func TestAdminRoutes(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	streamReq := httptest.NewRequest(http.MethodGet, "/admin/api/batch/"+taskID+"/stream", nil)
 	streamReq.Header.Set("Authorization", "Bearer admin-key")
-	streamResp := httptest.NewRecorder()
+	streamResp := testutil.NewCloseNotifyRecorder()
 	router.ServeHTTP(streamResp, streamReq)
 	if streamResp.Code != http.StatusOK || !strings.Contains(streamResp.Body.String(), "done") {
 		t.Fatalf("batch stream failed: %d %s", streamResp.Code, streamResp.Body.String())
