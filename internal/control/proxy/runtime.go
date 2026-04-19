@@ -1,17 +1,11 @@
 package proxy
 
 import (
-	"context"
-	"crypto/tls"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ddmww/grok2api-go/internal/platform/config"
-	xproxy "golang.org/x/net/proxy"
 )
 
 type Runtime struct {
@@ -67,39 +61,47 @@ func (r *Runtime) Client(resource bool) (*http.Client, string, error) {
 	}
 	r.mu.Unlock()
 
-	insecure := r.cfg.GetBool("proxy.egress.skip_ssl_verify", false)
-	transport := &http.Transport{
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure}, //nolint:gosec
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 0,
-	}
-	if proxyURL != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, "", err
-		}
-		if strings.HasPrefix(parsed.Scheme, "socks5") {
-			dialer, err := xproxy.FromURL(parsed, xproxy.Direct)
-			if err != nil {
-				return nil, "", err
-			}
-			if contextDialer, ok := dialer.(xproxy.ContextDialer); ok {
-				transport.DialContext = contextDialer.DialContext
-			} else {
-				transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				}
-			}
-		} else {
-			transport.Proxy = http.ProxyURL(parsed)
-		}
+	transport, err := newTransport(r.cfg, proxyURL)
+	if err != nil {
+		return nil, "", err
 	}
 	client := &http.Client{Transport: transport}
 	r.mu.Lock()
 	r.cache[key] = client
 	r.mu.Unlock()
 	return client, proxyURL, nil
+}
+
+func (r *Runtime) Reset(proxyURL string) {
+	key := strings.TrimSpace(proxyURL)
+	if key == "" {
+		key = "direct"
+	}
+
+	r.mu.Lock()
+	client := r.cache[key]
+	delete(r.cache, key)
+	r.mu.Unlock()
+
+	if client != nil {
+		if transport, ok := client.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+	}
+}
+
+func (r *Runtime) ResetAll() {
+	r.mu.Lock()
+	clients := make([]*http.Client, 0, len(r.cache))
+	for key, client := range r.cache {
+		clients = append(clients, client)
+		delete(r.cache, key)
+	}
+	r.mu.Unlock()
+
+	for _, client := range clients {
+		if transport, ok := client.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+	}
 }

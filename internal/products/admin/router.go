@@ -57,6 +57,7 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
+			state.Proxy.ResetAll()
 			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "配置已更新"})
 		})
 		api.GET("/storage", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"type": state.Repo.StorageType()}) })

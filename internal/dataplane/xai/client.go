@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -58,56 +56,12 @@ func (c *Client) endpoint(path string) string {
 	return c.baseURL() + path
 }
 
-func sanitizeToken(token string) string {
-	if strings.HasPrefix(token, "sso=") {
-		return strings.TrimPrefix(token, "sso=")
-	}
-	return token
-}
-
-func (c *Client) buildCookie(token string) string {
-	cookie := fmt.Sprintf("sso=%s; sso-rw=%s", sanitizeToken(token), sanitizeToken(token))
-	if extra := strings.TrimSpace(c.cfg.GetString("proxy.clearance.cf_cookies", "")); extra != "" {
-		cookie += "; " + extra
-	}
-	return cookie
-}
-
 func (c *Client) buildHeaders(token, contentType, origin, referer string) http.Header {
-	if contentType == "" {
-		contentType = "application/json"
-	}
-	if origin == "" {
-		origin = "https://grok.com"
-	}
-	if referer == "" {
-		referer = "https://grok.com/"
-	}
-	userAgent := c.cfg.GetString("proxy.clearance.user_agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-	statsig := "ZTpUeXBlRXJyb3I6IENhbm5vdCByZWFkIHByb3BlcnRpZXMgb2YgdW5kZWZpbmVkIChyZWFkaW5nICdjaGlsZE5vZGVzJyk="
-	if c.cfg.GetBool("features.dynamic_statsig", false) {
-		statsig = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("e:TypeError:%d", rand.Intn(999999))))
-	}
-	headers := http.Header{}
-	headers.Set("Accept", "*/*")
-	headers.Set("Accept-Encoding", "gzip, deflate, br, zstd")
-	headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	headers.Set("Content-Type", contentType)
-	headers.Set("Origin", origin)
-	headers.Set("Referer", referer)
-	headers.Set("Priority", "u=1, i")
-	headers.Set("Sec-Fetch-Dest", "empty")
-	headers.Set("Sec-Fetch-Mode", "cors")
-	headers.Set("Sec-Fetch-Site", "same-site")
-	headers.Set("User-Agent", userAgent)
-	headers.Set("Cookie", c.buildCookie(token))
-	headers.Set("x-statsig-id", statsig)
-	headers.Set("x-xai-request-id", fmt.Sprintf("%d", time.Now().UnixNano()))
-	return headers
+	return buildRequestHeaders(c.cfg, token, contentType, origin, referer)
 }
 
 func (c *Client) do(ctx context.Context, method, urlValue, token string, body []byte, resource bool) (*http.Response, error) {
-	client, _, err := c.proxy.Client(resource)
+	client, proxyKey, err := c.proxy.Client(resource)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +71,14 @@ func (c *Client) do(ctx context.Context, method, urlValue, token string, body []
 	}
 	headers := c.buildHeaders(token, "application/json", "https://grok.com", "https://grok.com/")
 	request.Header = headers
-	return client.Do(request)
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if isResettableStatus(c.cfg, response.StatusCode) {
+		c.proxy.Reset(proxyKey)
+	}
+	return response, nil
 }
 
 func (c *Client) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {
@@ -240,7 +201,7 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 	inner := append([]byte{0x0a, byte(len(name))}, name...)
 	protobuf := append([]byte{0x0a, 0x02, 0x10, value, 0x12, byte(len(inner))}, inner...)
 	frame := append([]byte{0x00, 0x00, 0x00, 0x00, byte(len(protobuf))}, protobuf...)
-	client, _, err := c.proxy.Client(false)
+	client, proxyKey, err := c.proxy.Client(false)
 	if err != nil {
 		return err
 	}
@@ -255,6 +216,9 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 	if err != nil {
 		return err
 	}
+	if isResettableStatus(c.cfg, resp.StatusCode) {
+		c.proxy.Reset(proxyKey)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -264,7 +228,7 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 }
 
 func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any, error) {
-	client, _, err := c.proxy.Client(true)
+	client, proxyKey, err := c.proxy.Client(true)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +240,9 @@ func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any
 	resp, err := client.Do(request)
 	if err != nil {
 		return nil, err
+	}
+	if isResettableStatus(c.cfg, resp.StatusCode) {
+		c.proxy.Reset(proxyKey)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -300,7 +267,7 @@ func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any
 }
 
 func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
-	client, _, err := c.proxy.Client(true)
+	client, proxyKey, err := c.proxy.Client(true)
 	if err != nil {
 		return err
 	}
@@ -312,6 +279,9 @@ func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
 	resp, err := client.Do(request)
 	if err != nil {
 		return err
+	}
+	if isResettableStatus(c.cfg, resp.StatusCode) {
+		c.proxy.Reset(proxyKey)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
