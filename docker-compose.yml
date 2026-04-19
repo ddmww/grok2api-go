@@ -1,0 +1,47 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/ddmww/grok2api-go:local
+    container_name: grok2api-go
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_BASE_DIR: /app
+      DATA_DIR: /app/data
+      LOG_DIR: /app/logs
+      ACCOUNT_STORAGE: ${ACCOUNT_STORAGE:-local}
+      ACCOUNT_MYSQL_URL: ${ACCOUNT_MYSQL_URL:-}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+        required: false
+
+  mysql:
+    image: mysql:8.4
+    profiles: ["mysql"]
+    container_name: grok2api-go-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-grok2api}
+      MYSQL_USER: ${MYSQL_USER:-grok2api}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-grok2api}
+    ports:
+      - "${MYSQL_HOST_PORT:-3306}:3306"
+    volumes:
+      - ./tmp/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

@@ -1,0 +1,9 @@
+.git
+.github
+data
+logs
+tmp
+*.db
+*.migrated
+*.log
+*.exe

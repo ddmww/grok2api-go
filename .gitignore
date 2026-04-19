@@ -1,0 +1,10 @@
+.env
+data/
+logs/
+tmp/
+*.db
+*.migrated
+*.log
+*.exe
+coverage.out
+dist/
