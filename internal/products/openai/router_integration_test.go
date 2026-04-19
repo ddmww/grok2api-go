@@ -121,7 +121,7 @@ func TestOpenAIRoutes(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
 		req.Header.Set("Authorization", "Bearer test-api-key")
 		req.Header.Set("Content-Type", "application/json")
-		resp := httptest.NewRecorder()
+		resp := testutil.NewCloseNotifyRecorder()
 		router.ServeHTTP(resp, req)
 		if resp.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", resp.Code)
@@ -161,7 +161,7 @@ func TestOpenAIRoutes(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
 		req.Header.Set("Authorization", "Bearer test-api-key")
 		req.Header.Set("Content-Type", "application/json")
-		resp := httptest.NewRecorder()
+		resp := testutil.NewCloseNotifyRecorder()
 		router.ServeHTTP(resp, req)
 		if resp.Code != http.StatusOK {
 			t.Fatalf("unexpected status: %d", resp.Code)
