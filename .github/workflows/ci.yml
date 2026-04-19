@@ -22,8 +22,18 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Build binary
-        run: go build ./cmd/server
+      - name: Build binaries
+        shell: bash
+        run: |
+          mkdir -p dist
+          go build -o dist/grok2api-go-linux-amd64 ./cmd/server
+          GOOS=windows GOARCH=amd64 go build -o dist/grok2api-go-windows-amd64.exe ./cmd/server
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok2api-go-binaries
+          path: dist/*
 
       - name: Validate Docker build
         run: docker build -t grok2api-go:test .
