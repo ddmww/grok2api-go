@@ -38,7 +38,7 @@ type metaEntity struct {
 }
 
 type accountEntity struct {
-	Token           string `gorm:"primaryKey;size:1024"`
+	Token           string `gorm:"primaryKey;size:512"`
 	Pool            string
 	Status          string
 	CreatedAt       int64  `gorm:"column:created_at"`
