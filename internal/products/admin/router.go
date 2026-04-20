@@ -1333,16 +1333,18 @@ func syncUpstreamBlockerConfigPatch(current map[string]any, payload map[string]a
 		message = upstreamblocker.DefaultMessage
 	}
 	normalized := map[string]any{
-		"enabled":        blocker["enabled"] == true,
-		"case_sensitive": blocker["case_sensitive"] == true,
+		"enabled":        normalizeBoolValue(blocker["enabled"]),
+		"case_sensitive": normalizeBoolValue(blocker["case_sensitive"]),
 		"keywords":       keywords,
 		"message":        message,
 	}
 	if normalized["enabled"].(bool) && len(keywords) == 0 {
 		normalized["__validation_error"] = "启用上游拦截时，至少需要配置一个关键词。"
 	}
-	if normalized["enabled"].(bool) && normalizeUpstreamBlockerMessage(blocker["message"]) == "" {
-		normalized["__validation_error"] = "上游拦截提示文案不能为空。"
+	if normalized["enabled"].(bool) && blockerPatch != nil {
+		if rawMessage, exists := blockerPatch["message"]; exists && normalizeUpstreamBlockerMessage(rawMessage) == "" {
+			normalized["__validation_error"] = "上游拦截提示文案不能为空。"
+		}
 	}
 	next["upstream_blocker"] = normalized
 	return next
@@ -1357,6 +1359,29 @@ func normalizeUpstreamBlockerMessage(value any) string {
 		return ""
 	}
 	return text
+}
+
+func normalizeBoolValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	case int:
+		return typed != 0
+	case int32:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float32:
+		return typed != 0
+	case float64:
+		return typed != 0
+	}
+	return false
 }
 
 func mergeMapAny(dst map[string]any, src map[string]any) {

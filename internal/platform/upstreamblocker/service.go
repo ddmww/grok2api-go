@@ -69,7 +69,7 @@ func GetConfig(cfg *config.Service) Config {
 		return Config{Message: DefaultMessage}
 	}
 	message := strings.TrimSpace(cfg.GetString("upstream_blocker.message", DefaultMessage))
-	if message == "" {
+	if message == "" || message == "<nil>" {
 		message = DefaultMessage
 	}
 	return Config{

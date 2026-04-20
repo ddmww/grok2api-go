@@ -208,6 +208,49 @@ func TestAdminRoutes(t *testing.T) {
 		t.Fatalf("upstream blocker normalize mismatch: %#v", blockerSection)
 	}
 
+	if err := cfg.Update(context.Background(), map[string]any{
+		"upstream_blocker": map[string]any{
+			"enabled":        "true",
+			"case_sensitive": "false",
+			"keywords":       " legacy-one \nlegacy-two\n",
+			"message":        "<nil>",
+		},
+	}); err != nil {
+		t.Fatalf("seed legacy upstream blocker failed: %v", err)
+	}
+
+	resp = doJSON(http.MethodGet, "/admin/api/config", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("config get with legacy upstream blocker failed: %d %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"enabled":true`) || !strings.Contains(resp.Body.String(), `legacy-one`) || !strings.Contains(resp.Body.String(), `legacy-two`) || !strings.Contains(resp.Body.String(), `上游渠道商拦截了当前请求`) {
+		t.Fatalf("legacy upstream blocker not normalized on get: %s", resp.Body.String())
+	}
+
+	resp = doJSON(http.MethodPost, "/admin/api/config", map[string]any{
+		"upstream_blocker": map[string]any{
+			"enabled": true,
+		},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("legacy upstream blocker partial update failed: %d %s", resp.Code, resp.Body.String())
+	}
+	rawConfig = cfg.Raw()
+	blockerSection, _ = rawConfig["upstream_blocker"].(map[string]any)
+	if blockerSection["enabled"] != true || blockerSection["message"] != "上游渠道商拦截了当前请求，请尝试换个说法后重试，或稍后再试。" {
+		t.Fatalf("legacy upstream blocker partial update normalization mismatch: %#v", blockerSection)
+	}
+	keywordsLen = 0
+	switch keywords := blockerSection["keywords"].(type) {
+	case []any:
+		keywordsLen = len(keywords)
+	case []string:
+		keywordsLen = len(keywords)
+	}
+	if keywordsLen != 2 {
+		t.Fatalf("legacy upstream blocker keywords lost after partial update: %#v", blockerSection["keywords"])
+	}
+
 	resp = doJSON(http.MethodPost, "/admin/api/config", map[string]any{
 		"upstream_blocker": map[string]any{
 			"enabled":  true,
