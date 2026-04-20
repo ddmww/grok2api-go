@@ -33,7 +33,12 @@ type Repository interface {
 }
 
 type metaEntity struct {
-	Key   string `gorm:"primaryKey;size:64"`
+	MetaKey string `gorm:"column:meta_key;primaryKey;size:64"`
+	Value   int64  `gorm:"column:value"`
+}
+
+type legacyMetaEntity struct {
+	Key   string `gorm:"column:key;primaryKey;size:64"`
 	Value int64  `gorm:"column:value"`
 }
 
@@ -71,6 +76,9 @@ type gormRepository struct {
 
 func (accountEntity) TableName() string { return "accounts" }
 func (metaEntity) TableName() string    { return "account_meta" }
+func (legacyMetaEntity) TableName() string {
+	return "account_meta"
+}
 
 func NewRepositoryFromEnv() (Repository, error) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("ACCOUNT_STORAGE"))) {
@@ -104,15 +112,18 @@ func (r *gormRepository) StorageType() string { return r.storageType }
 func (r *gormRepository) DB() *gorm.DB { return r.db }
 
 func (r *gormRepository) Initialize(ctx context.Context) error {
+	if err := r.migrateMetaSchema(ctx); err != nil {
+		return err
+	}
 	if err := r.db.WithContext(ctx).AutoMigrate(&accountEntity{}, &metaEntity{}); err != nil {
 		return err
 	}
 	var count int64
-	if err := r.db.WithContext(ctx).Model(&metaEntity{}).Where("key = ?", "revision").Count(&count).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&metaEntity{}).Where("meta_key = ?", "revision").Count(&count).Error; err != nil {
 		return err
 	}
 	if count == 0 {
-		if err := r.db.WithContext(ctx).Create(&metaEntity{Key: "revision", Value: 0}).Error; err != nil {
+		if err := r.db.WithContext(ctx).Create(&metaEntity{MetaKey: "revision", Value: 0}).Error; err != nil {
 			return err
 		}
 	}
@@ -134,7 +145,7 @@ func (r *gormRepository) Close() error {
 
 func (r *gormRepository) GetRevision(ctx context.Context) (int64, error) {
 	var meta metaEntity
-	if err := r.db.WithContext(ctx).First(&meta, "key = ?", "revision").Error; err != nil {
+	if err := r.db.WithContext(ctx).First(&meta, "meta_key = ?", "revision").Error; err != nil {
 		return 0, err
 	}
 	return meta.Value, nil
@@ -142,7 +153,7 @@ func (r *gormRepository) GetRevision(ctx context.Context) (int64, error) {
 
 func (r *gormRepository) bumpRevision(tx *gorm.DB) (int64, error) {
 	var meta metaEntity
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&meta, "key = ?", "revision").Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&meta, "meta_key = ?", "revision").Error; err != nil {
 		return 0, err
 	}
 	meta.Value++
@@ -862,9 +873,8 @@ func (r *gormRepository) migrateLocalSQLite(ctx context.Context) error {
 
 	revision := int64(len(sourceAccounts))
 	if sourceDB.WithContext(ctx).Migrator().HasTable(&metaEntity{}) {
-		var meta metaEntity
-		if err := sourceDB.WithContext(ctx).First(&meta, "key = ?", "revision").Error; err == nil && meta.Value > 0 {
-			revision = meta.Value
+		if value, err := readMetaRevision(sourceDB.WithContext(ctx)); err == nil && value > 0 {
+			revision = value
 		}
 	}
 
@@ -878,7 +888,7 @@ func (r *gormRepository) migrateLocalSQLite(ctx context.Context) error {
 				return err
 			}
 		}
-		return tx.Model(&metaEntity{}).Where("key = ?", "revision").Update("value", revision).Error
+		return tx.Model(&metaEntity{}).Where("meta_key = ?", "revision").Update("value", revision).Error
 	}); err != nil {
 		return err
 	}
@@ -889,4 +899,30 @@ func (r *gormRepository) migrateLocalSQLite(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (r *gormRepository) migrateMetaSchema(ctx context.Context) error {
+	migrator := r.db.WithContext(ctx).Migrator()
+	if !migrator.HasTable(&metaEntity{}) {
+		return nil
+	}
+	if migrator.HasColumn(&legacyMetaEntity{}, "key") && !migrator.HasColumn(&metaEntity{}, "meta_key") {
+		if err := migrator.RenameColumn(&legacyMetaEntity{}, "key", "meta_key"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readMetaRevision(db *gorm.DB) (int64, error) {
+	var meta metaEntity
+	if err := db.First(&meta, "meta_key = ?", "revision").Error; err == nil {
+		return meta.Value, nil
+	}
+
+	var legacy legacyMetaEntity
+	if err := db.First(&legacy, "key = ?", "revision").Error; err != nil {
+		return 0, err
+	}
+	return legacy.Value, nil
 }

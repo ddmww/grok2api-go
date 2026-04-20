@@ -1781,6 +1781,7 @@ async function copyText(text, successText) {
 async function copy(t) {
   return copyText(t, tr('account.copied', null, '已复制'));
 }
+const TOKEN_IMPORT_CHUNK_SIZE = 1000;
 async function copyModelId(id) {
   if (!id) return false;
   return copyText(id, tr('account.modelCopied', { model: id }, `已复制模型名：${id}`));
@@ -1932,11 +1933,18 @@ async function saveTokens(pool, newToks, modalId, pendingMessage, successPrefix,
   const unique = [...new Set(newToks)];
   try {
     showToast(pendingMessage, 'info');
-    const d = await _api('POST', '/tokens/add', { pool, tokens: unique });
+    let totalCount = 0;
+    let totalSkipped = 0;
+    for (let i = 0; i < unique.length; i += TOKEN_IMPORT_CHUNK_SIZE) {
+      const chunk = unique.slice(i, i + TOKEN_IMPORT_CHUNK_SIZE);
+      const d = await _api('POST', '/tokens/add', { pool, tokens: chunk });
+      totalCount += Number(d.count || 0);
+      totalSkipped += Number(d.skipped || 0);
+    }
     closeModal(modalId);
-    const msg = d.skipped
-      ? tr('account.saveResultSkipped', { prefix: successPrefix, count: d.count, skipped: d.skipped }, `${successPrefix}，新增 ${d.count}，已存在跳过 ${d.skipped}`)
-      : tr('account.saveResult', { prefix: successPrefix, count: d.count }, `${successPrefix}，新增 ${d.count} 个`);
+    const msg = totalSkipped
+      ? tr('account.saveResultSkipped', { prefix: successPrefix, count: totalCount, skipped: totalSkipped }, `${successPrefix}，新增 ${totalCount}，已存在跳过 ${totalSkipped}`)
+      : tr('account.saveResult', { prefix: successPrefix, count: totalCount }, `${successPrefix}，新增 ${totalCount} 个`);
     showToast(msg, 'success');
     load();
   } catch (e) { showToast(`${errorPrefix}: ${e.message}`, 'error'); }

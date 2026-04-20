@@ -54,6 +54,8 @@ var (
 	}
 )
 
+const tokenImportBatchSize = 1000
+
 func Mount(router *gin.Engine, state *app.State) {
 	updater := newUpdateService()
 	router.StaticFS("/static", http.Dir(paths.StaticDir()))
@@ -194,16 +196,10 @@ func Mount(router *gin.Engine, state *app.State) {
 				return
 			}
 
-			existingRecords, err := state.Repo.GetAccounts(c.Request.Context(), cleaned)
+			existing, err := activeTokenSet(c.Request.Context(), state.Repo, cleaned)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
-			}
-			existing := map[string]struct{}{}
-			for _, record := range existingRecords {
-				if !record.IsDeleted() {
-					existing[record.Token] = struct{}{}
-				}
 			}
 
 			newTokens := make([]string, 0, len(cleaned))
@@ -218,24 +214,32 @@ func Mount(router *gin.Engine, state *app.State) {
 			}
 
 			initialPool := account.NormalizePool(payload.Pool)
-			upserts := make([]account.Upsert, 0, len(newTokens))
-			for _, token := range newTokens {
-				upserts = append(upserts, account.Upsert{Token: token, Pool: initialPool, Tags: account.NormalizeTags(payload.Tags)})
-			}
-			result, err := state.Repo.UpsertAccounts(c.Request.Context(), upserts)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
-			if syncAutoDetect {
-				refreshResult, refreshErr := state.Refresh.RefreshTokens(c.Request.Context(), newTokens)
-				if refreshErr != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": refreshErr.Error()})
+			inserted := 0
+			for _, chunk := range chunkStrings(newTokens, tokenImportBatchSize) {
+				upserts := make([]account.Upsert, 0, len(chunk))
+				for _, token := range chunk {
+					upserts = append(upserts, account.Upsert{Token: token, Pool: initialPool, Tags: account.NormalizeTags(payload.Tags)})
+				}
+				result, err := state.Repo.UpsertAccounts(c.Request.Context(), upserts)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 					return
 				}
-				if refreshResult.Refreshed != len(newTokens) {
+				inserted += result.Upserted
+			}
+			if syncAutoDetect {
+				refreshed := 0
+				for _, chunk := range chunkStrings(newTokens, tokenImportBatchSize) {
+					refreshResult, refreshErr := state.Refresh.RefreshTokens(c.Request.Context(), chunk)
+					if refreshErr != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"message": refreshErr.Error()})
+						return
+					}
+					refreshed += refreshResult.Refreshed
+				}
+				if refreshed != len(newTokens) {
 					c.JSON(http.StatusInternalServerError, gin.H{
-						"message": fmt.Sprintf("auto-detect refresh incomplete: refreshed %d of %d tokens", refreshResult.Refreshed, len(newTokens)),
+						"message": fmt.Sprintf("auto-detect refresh incomplete: refreshed %d of %d tokens", refreshed, len(newTokens)),
 					})
 					return
 				}
@@ -243,7 +247,7 @@ func Mount(router *gin.Engine, state *app.State) {
 				go state.Refresh.RefreshOnImport(context.Background(), newTokens)
 			}
 			_ = state.Runtime.Sync(c.Request.Context())
-			c.JSON(http.StatusOK, gin.H{"status": "success", "count": result.Upserted, "skipped": len(existing), "synced": syncAutoDetect})
+			c.JSON(http.StatusOK, gin.H{"status": "success", "count": inserted, "skipped": len(cleaned) - len(newTokens), "synced": syncAutoDetect})
 		})
 
 		api.DELETE("/tokens", func(c *gin.Context) {
@@ -583,6 +587,40 @@ func sanitizeTokens(tokens []string) []string {
 		out = append(out, token)
 	}
 	return out
+}
+
+func chunkStrings(items []string, size int) [][]string {
+	if len(items) == 0 {
+		return nil
+	}
+	if size <= 0 {
+		size = tokenImportBatchSize
+	}
+	chunks := make([][]string, 0, (len(items)+size-1)/size)
+	for start := 0; start < len(items); start += size {
+		end := start + size
+		if end > len(items) {
+			end = len(items)
+		}
+		chunks = append(chunks, items[start:end])
+	}
+	return chunks
+}
+
+func activeTokenSet(ctx context.Context, repo account.Repository, tokens []string) (map[string]struct{}, error) {
+	existing := map[string]struct{}{}
+	for _, chunk := range chunkStrings(tokens, tokenImportBatchSize) {
+		records, err := repo.GetAccounts(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			if !record.IsDeleted() {
+				existing[record.Token] = struct{}{}
+			}
+		}
+	}
+	return existing, nil
 }
 
 func parseTokenImportItems(items []any, pool string) []account.Upsert {
