@@ -28,7 +28,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/login-action@v3
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -52,7 +51,6 @@ jobs:
           labels: ${{ steps.meta-ghcr.outputs.labels }}
 
       - uses: docker/metadata-action@v5
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         id: meta-dockerhub
         with:
           images: docker.io/dmwdmw/grok2api-go
@@ -62,7 +60,6 @@ jobs:
             type=sha
 
       - uses: docker/build-push-action@v6
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         with:
           context: .
           file: ./Dockerfile
