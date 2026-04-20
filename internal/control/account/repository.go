@@ -381,17 +381,17 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	}
 	summary.Status["all"] = statusAll
 	var statusActive int64
-	if err := countInto(statusScope.Where("status = ?", string(StatusActive)), &statusActive); err != nil {
+	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusActive)), &statusActive); err != nil {
 		return Summary{}, err
 	}
 	summary.Status["active"] = statusActive
 	var statusCooling int64
-	if err := countInto(statusScope.Where("status = ?", string(StatusCooling)), &statusCooling); err != nil {
+	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusCooling)), &statusCooling); err != nil {
 		return Summary{}, err
 	}
 	summary.Status["cooling"] = statusCooling
 	var statusDisabled int64
-	if err := countInto(statusScope.Where("status = ?", string(StatusDisabled)), &statusDisabled); err != nil {
+	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusDisabled)), &statusDisabled); err != nil {
 		return Summary{}, err
 	}
 	summary.Status["disabled"] = statusDisabled
@@ -408,7 +408,7 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	summary.Pool["all"] = poolAll
 	for _, pool := range []string{"basic", "super", "heavy"} {
 		var poolCount int64
-		if err := countInto(poolScope.Where("pool = ?", pool), &poolCount); err != nil {
+		if err := countInto(newScope(queryWithoutPool(query)).Where("pool = ?", pool), &poolCount); err != nil {
 			return Summary{}, err
 		}
 		summary.Pool[pool] = poolCount

@@ -8,16 +8,18 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/mod/semver"
 )
 
-const defaultAPIBaseURL = "https://api.github.com"
+const defaultAPIBaseURL = "https://hub.docker.com/v2/namespaces"
 
 type ReleaseInfo struct {
 	Status          string `json:"status"`
 	CurrentVersion  string `json:"current_version"`
+	CurrentCommit   string `json:"current_commit,omitempty"`
+	CurrentImageTag string `json:"current_image_tag,omitempty"`
 	LatestVersion   string `json:"latest_version"`
+	LatestCommit    string `json:"latest_commit,omitempty"`
+	LatestImageTag  string `json:"latest_image_tag,omitempty"`
 	HasUpdate       bool   `json:"has_update"`
 	UpdateAvailable bool   `json:"update_available"`
 	ReleaseNotes    string `json:"release_notes"`
@@ -26,33 +28,44 @@ type ReleaseInfo struct {
 }
 
 type Service struct {
-	owner      string
-	repo       string
-	current    string
-	apiBaseURL string
-	client     *http.Client
-	ttl        time.Duration
-	now        func() time.Time
-
-	mu        sync.Mutex
-	cached    ReleaseInfo
-	expiresAt time.Time
+	namespace   string
+	repo        string
+	current     string
+	currentSHA  string
+	currentTag  string
+	apiBaseURL  string
+	client      *http.Client
+	ttl         time.Duration
+	now         func() time.Time
+	mu          sync.Mutex
+	cached      ReleaseInfo
+	expiresAt   time.Time
 }
 
-type release struct {
-	TagName     string `json:"tag_name"`
-	Body        string `json:"body"`
-	HTMLURL     string `json:"html_url"`
-	PublishedAt string `json:"published_at"`
-	Draft       bool   `json:"draft"`
-	Prerelease  bool   `json:"prerelease"`
+type tagListResponse struct {
+	Results []tagDetail `json:"results"`
 }
 
-func NewService(current, owner, repo string) *Service {
+type tagDetail struct {
+	Name        string      `json:"name"`
+	LastUpdated string      `json:"last_updated"`
+	Images      []tagImage  `json:"images"`
+	FullSize    int64       `json:"full_size"`
+}
+
+type tagImage struct {
+	Digest       string `json:"digest"`
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+}
+
+func NewService(currentVersion, currentCommit, currentImageTag, namespace, repo string) *Service {
 	return &Service{
-		owner:      owner,
-		repo:       repo,
-		current:    strings.TrimSpace(current),
+		namespace:  strings.TrimSpace(namespace),
+		repo:       strings.TrimSpace(repo),
+		current:    strings.TrimSpace(currentVersion),
+		currentSHA: strings.TrimSpace(currentCommit),
+		currentTag: strings.TrimSpace(currentImageTag),
 		apiBaseURL: defaultAPIBaseURL,
 		client:     &http.Client{Timeout: 5 * time.Second},
 		ttl:        10 * time.Minute,
@@ -82,7 +95,11 @@ func (s *Service) GetLatestReleaseInfo(ctx context.Context, force bool) ReleaseI
 		info = ReleaseInfo{
 			Status:          "error",
 			CurrentVersion:  s.current,
+			CurrentCommit:   s.currentSHA,
+			CurrentImageTag: s.currentTag,
 			LatestVersion:   s.current,
+			LatestCommit:    s.currentSHA,
+			LatestImageTag:  s.currentTag,
 			HasUpdate:       false,
 			UpdateAvailable: false,
 		}
@@ -96,84 +113,132 @@ func (s *Service) GetLatestReleaseInfo(ctx context.Context, force bool) ReleaseI
 }
 
 func (s *Service) fetch(ctx context.Context) (ReleaseInfo, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=10", s.apiBaseURL, s.owner, s.repo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	latestTag, err := s.fetchTag(ctx, "latest")
 	if err != nil {
 		return ReleaseInfo{}, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	allTags, err := s.fetchTags(ctx)
+	if err != nil {
+		return ReleaseInfo{}, err
+	}
+
+	latestDigest := firstDigest(latestTag.Images)
+	latestCommit := findMatchingCommitTag(allTags, latestDigest)
+	latestVersion := strings.TrimSpace(latestTag.Name)
+	if latestCommit != "" {
+		latestVersion = latestCommit
+	}
+
+	hasUpdate := false
+	currentCommit := strings.TrimSpace(s.currentSHA)
+	if currentCommit != "" && latestCommit != "" {
+		hasUpdate = !strings.EqualFold(currentCommit, latestCommit)
+	} else if strings.TrimSpace(s.currentTag) != "" {
+		hasUpdate = !strings.EqualFold(strings.TrimSpace(s.currentTag), strings.TrimSpace(latestTag.Name))
+	}
+
+	return ReleaseInfo{
+		Status:          "ok",
+		CurrentVersion:  s.current,
+		CurrentCommit:   currentCommit,
+		CurrentImageTag: s.currentTag,
+		LatestVersion:   latestVersion,
+		LatestCommit:    latestCommit,
+		LatestImageTag:  strings.TrimSpace(latestTag.Name),
+		HasUpdate:       hasUpdate,
+		UpdateAvailable: hasUpdate,
+		ReleaseNotes:    buildReleaseNotes(s.namespace, s.repo, latestTag, latestCommit, latestDigest),
+		ReleaseURL:      fmt.Sprintf("https://hub.docker.com/r/%s/%s/tags", s.namespace, s.repo),
+		PublishedAt:     strings.TrimSpace(latestTag.LastUpdated),
+	}, nil
+}
+
+func (s *Service) fetchTag(ctx context.Context, tag string) (tagDetail, error) {
+	url := fmt.Sprintf("%s/%s/repositories/%s/tags/%s", s.apiBaseURL, s.namespace, s.repo, tag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return tagDetail{}, err
+	}
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "grok2api-go-update-check")
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return ReleaseInfo{}, err
+		return tagDetail{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ReleaseInfo{}, fmt.Errorf("github releases returned %d", resp.StatusCode)
+		return tagDetail{}, fmt.Errorf("docker hub tag returned %d", resp.StatusCode)
 	}
 
-	var releases []release
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return ReleaseInfo{}, err
+	var detail tagDetail
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return tagDetail{}, err
 	}
-	selected := selectLatestRelease(releases)
-	if selected == nil {
-		return ReleaseInfo{}, fmt.Errorf("no valid releases found")
-	}
-
-	latest := normalizeComparableVersion(selected.TagName)
-	hasUpdate := isNewerVersion(s.current, selected.TagName)
-	return ReleaseInfo{
-		Status:          "ok",
-		CurrentVersion:  s.current,
-		LatestVersion:   latest,
-		HasUpdate:       hasUpdate,
-		UpdateAvailable: hasUpdate,
-		ReleaseNotes:    selected.Body,
-		ReleaseURL:      strings.TrimSpace(selected.HTMLURL),
-		PublishedAt:     strings.TrimSpace(selected.PublishedAt),
-	}, nil
+	return detail, nil
 }
 
-func selectLatestRelease(releases []release) *release {
-	for _, item := range releases {
-		if item.Draft || item.Prerelease {
-			continue
-		}
-		if normalizeComparableVersion(item.TagName) == "" {
-			continue
-		}
-		releaseCopy := item
-		return &releaseCopy
+func (s *Service) fetchTags(ctx context.Context) ([]tagDetail, error) {
+	url := fmt.Sprintf("%s/%s/repositories/%s/tags?page_size=100", s.apiBaseURL, s.namespace, s.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "grok2api-go-update-check")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker hub tags returned %d", resp.StatusCode)
+	}
+
+	var payload tagListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload.Results, nil
 }
 
-func isNewerVersion(current, latest string) bool {
-	currentVersion := normalizeComparableVersion(current)
-	latestVersion := normalizeComparableVersion(latest)
-	if latestVersion == "" {
-		return false
-	}
-	if currentVersion == "" {
-		return currentVersion != latestVersion
-	}
-	return semver.Compare("v"+currentVersion, "v"+latestVersion) < 0
-}
-
-func normalizeComparableVersion(value string) string {
-	text := strings.TrimSpace(value)
-	text = strings.TrimPrefix(text, "v")
-	if text == "" {
+func findMatchingCommitTag(tags []tagDetail, digest string) string {
+	if strings.TrimSpace(digest) == "" {
 		return ""
 	}
-	if cut := strings.IndexAny(text, "-+"); cut >= 0 {
-		text = text[:cut]
+	for _, item := range tags {
+		if !strings.HasPrefix(strings.TrimSpace(item.Name), "sha-") {
+			continue
+		}
+		if firstDigest(item.Images) == digest {
+			return strings.TrimPrefix(strings.TrimSpace(item.Name), "sha-")
+		}
 	}
-	candidate := "v" + text
-	if !semver.IsValid(candidate) {
-		return ""
+	return ""
+}
+
+func firstDigest(images []tagImage) string {
+	for _, image := range images {
+		if strings.TrimSpace(image.Digest) != "" {
+			return strings.TrimSpace(image.Digest)
+		}
 	}
-	return strings.TrimPrefix(semver.Canonical(candidate), "v")
+	return ""
+}
+
+func buildReleaseNotes(namespace, repo string, latest tagDetail, latestCommit, latestDigest string) string {
+	lines := []string{
+		fmt.Sprintf("Docker Hub image: `%s/%s:%s`", namespace, repo, strings.TrimSpace(latest.Name)),
+	}
+	if latestCommit != "" {
+		lines = append(lines, fmt.Sprintf("Commit: `%s`", latestCommit))
+	}
+	if latestDigest != "" {
+		lines = append(lines, fmt.Sprintf("Digest: `%s`", latestDigest))
+	}
+	if latest.LastUpdated != "" {
+		lines = append(lines, fmt.Sprintf("Published: `%s`", latest.LastUpdated))
+	}
+	return strings.Join(lines, "\n")
 }

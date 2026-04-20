@@ -26,6 +26,7 @@ func TestRepositoryListAccountsAndSummary(t *testing.T) {
 	if _, err := repo.UpsertAccounts(context.Background(), []Upsert{
 		{Token: "basic-active", Pool: "basic", Tags: []string{"seed"}},
 		{Token: "basic-nsfw", Pool: "basic", Tags: []string{"nsfw"}},
+		{Token: "basic-cooling", Pool: "basic"},
 		{Token: "super-disabled", Pool: "super"},
 		{Token: "heavy-invalid", Pool: "heavy"},
 	}); err != nil {
@@ -33,6 +34,11 @@ func TestRepositoryListAccountsAndSummary(t *testing.T) {
 	}
 
 	_, err = repo.PatchAccounts(context.Background(), []Patch{
+		{
+			Token:         "basic-cooling",
+			Status:        testStatusPtr(StatusCooling),
+			UsageFailDelta: testIntPtr(1),
+		},
 		{
 			Token:         "super-disabled",
 			Status:        testStatusPtr(StatusDisabled),
@@ -82,19 +88,30 @@ func TestRepositoryListAccountsAndSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if summary.Total != 2 {
-		t.Fatalf("expected basic total 2, got %d", summary.Total)
+	if summary.Total != 3 {
+		t.Fatalf("expected basic total 3, got %d", summary.Total)
 	}
-	if summary.Status["all"] != 2 || summary.Status["active"] != 2 {
+	if summary.Status["all"] != 3 || summary.Status["active"] != 2 || summary.Status["cooling"] != 1 {
 		t.Fatalf("unexpected status summary: %#v", summary.Status)
 	}
-	if summary.NSFW["enabled"] != 1 || summary.NSFW["disabled"] != 1 {
+	if summary.NSFW["enabled"] != 1 || summary.NSFW["disabled"] != 2 {
 		t.Fatalf("unexpected nsfw summary: %#v", summary.NSFW)
 	}
-	if summary.Calls != 3 {
+	if summary.Calls != 4 {
 		t.Fatalf("unexpected calls summary: %d", summary.Calls)
 	}
 	if summary.Quota["auto"] <= 0 || summary.Quota["fast"] <= 0 {
 		t.Fatalf("unexpected quota summary: %#v", summary.Quota)
+	}
+
+	fullSummary, err := repo.SummarizeAccounts(context.Background(), ListQuery{})
+	if err != nil {
+		t.Fatalf("full summary: %v", err)
+	}
+	if fullSummary.Pool["basic"] != 3 || fullSummary.Pool["super"] != 1 || fullSummary.Pool["heavy"] != 1 {
+		t.Fatalf("unexpected pool summary: %#v", fullSummary.Pool)
+	}
+	if fullSummary.Status["cooling"] != 1 || fullSummary.Status["disabled"] != 1 || fullSummary.Status["invalid"] != 1 {
+		t.Fatalf("unexpected full status summary: %#v", fullSummary.Status)
 	}
 }

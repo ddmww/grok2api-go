@@ -2,6 +2,10 @@ FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=0.1.0-dev
+ARG COMMIT=dev
+ARG IMAGE_TAG=dev
+ARG BUILD_TIME=
 
 WORKDIR /src
 
@@ -14,7 +18,12 @@ COPY web ./web
 COPY config.defaults.toml ./
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/grok2api-go ./cmd/server
+    go build -trimpath -ldflags="-s -w \
+    -X github.com/ddmww/grok2api-go/internal/platform/version.Current=${VERSION} \
+    -X github.com/ddmww/grok2api-go/internal/platform/version.Commit=${COMMIT} \
+    -X github.com/ddmww/grok2api-go/internal/platform/version.ImageTag=${IMAGE_TAG} \
+    -X github.com/ddmww/grok2api-go/internal/platform/version.BuildTime=${BUILD_TIME}" \
+    -o /out/grok2api-go ./cmd/server
 
 FROM debian:bookworm-slim
 

@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,14 +16,23 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/account"
 	"github.com/ddmww/grok2api-go/internal/control/proxy"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
+	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
 	"github.com/ddmww/grok2api-go/internal/testutil"
 	"github.com/gin-gonic/gin"
 )
 
 func TestOpenAIRoutes(t *testing.T) {
+	dataDir := t.TempDir()
 	t.Setenv("ACCOUNT_STORAGE", "local")
-	t.Setenv("ACCOUNT_LOCAL_PATH", filepath.Join(t.TempDir(), "accounts.db"))
+	t.Setenv("DATA_DIR", dataDir)
+	t.Setenv("ACCOUNT_LOCAL_PATH", filepath.Join(dataDir, "accounts.db"))
+	if err := paths.EnsureRuntimeDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "files", "images", "sample.png"), []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image cache: %v", err)
+	}
 
 	repo, err := account.NewRepositoryFromEnv()
 	if err != nil {
@@ -90,6 +100,18 @@ func TestOpenAIRoutes(t *testing.T) {
 		}
 		if !strings.Contains(resp.Body.String(), "grok-4.20-fast") {
 			t.Fatalf("models body missing expected model: %s", resp.Body.String())
+		}
+	})
+
+	t.Run("public image file", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/files/image?id=sample", nil)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+		if contentType := resp.Header().Get("Content-Type"); !strings.Contains(contentType, "image/png") {
+			t.Fatalf("unexpected content-type: %s", contentType)
 		}
 	})
 

@@ -2,6 +2,8 @@ window.renderAdminHeader = async function renderAdminHeader() {
   const mount = document.getElementById('admin-header');
   if (!mount || mount.children.length) return;
   let appVersion = '';
+  let appCommit = '';
+  let appImageTag = '';
   let updateInfo = null;
   let updateStatus = 'idle';
   let updatePromise = null;
@@ -90,8 +92,12 @@ window.renderAdminHeader = async function renderAdminHeader() {
       if (!res.ok) throw new Error('meta unavailable');
       const data = await res.json();
       appVersion = String(data?.version || '').trim();
+      appCommit = String(data?.commit || '').trim();
+      appImageTag = String(data?.image_tag || '').trim();
     } catch {
       appVersion = '';
+      appCommit = '';
+      appImageTag = '';
     }
   };
 
@@ -402,14 +408,24 @@ window.renderAdminHeader = async function renderAdminHeader() {
     const close = overlay.querySelector('#admin-version-modal-close');
     const latestVersion = String(updateInfo?.latest_version || appVersion || '').trim();
     const currentVersion = String(appVersion || updateInfo?.current_version || '').trim();
+    const currentCommit = String(appCommit || updateInfo?.current_commit || '').trim();
+    const latestCommit = String(updateInfo?.latest_commit || '').trim();
     const releaseUrl = String(updateInfo?.release_url || '').trim();
     const releaseNotes = String(updateInfo?.release_notes || '').trim();
 
     if (title) title.textContent = text('header.versionDialogTitle', 'Version');
     if (currentLabel) currentLabel.textContent = `${text('header.versionCurrent', 'Current')}:`;
-    if (currentValue) currentValue.textContent = currentVersion ? `v${currentVersion}` : '-';
+    if (currentValue) {
+      currentValue.textContent = currentVersion
+        ? `${currentVersion}${currentCommit ? ` (${currentCommit.slice(0, 7)})` : ''}`
+        : '-';
+    }
     if (latestLabel) latestLabel.textContent = `${text('header.versionLatest', 'Latest')}:`;
-    if (latestValue) latestValue.textContent = latestVersion ? `v${latestVersion}` : '-';
+    if (latestValue) {
+      latestValue.textContent = latestVersion
+        ? `${latestVersion}${latestCommit ? ` (${latestCommit.slice(0, 7)})` : ''}`
+        : '-';
+    }
     if (publishedLabel) publishedLabel.textContent = `${text('header.versionPublishedAt', 'Published')}:`;
     if (publishedValue) publishedValue.textContent = formatDateTime(updateInfo?.published_at);
 
@@ -499,7 +515,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
     const right = mount.querySelector('.admin-header-right');
     if (!right) return;
     let node = mount.querySelector('#hd-version');
-    if (!appVersion) {
+    if (!appVersion && !appCommit) {
       node?.remove();
       return;
     }
@@ -509,9 +525,12 @@ window.renderAdminHeader = async function renderAdminHeader() {
       node.className = 'admin-header-version';
       right.insertBefore(node, right.firstChild);
     }
-    const value = `v${appVersion}`;
+    const value = appVersion
+      ? `${appVersion}${appCommit ? ` (${appCommit.slice(0, 7)})` : ''}`
+      : appCommit;
     node.textContent = value;
     node.title = value;
+    if (appImageTag) node.dataset.imageTag = appImageTag;
     node.classList.toggle('has-update', Boolean(updateInfo?.update_available));
     node.setAttribute('role', 'button');
     node.setAttribute('tabindex', '0');

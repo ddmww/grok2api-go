@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
@@ -19,6 +21,23 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Compute build metadata
+        id: meta
+        shell: bash
+        run: |
+          commit_short="${GITHUB_SHA::7}"
+          version="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          version="${version#v}"
+          if [[ -z "$version" ]]; then
+            version="0.1.0-dev"
+          fi
+          image_tag="dev-${commit_short}"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit_short" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "build_time=$build_time" >> "$GITHUB_OUTPUT"
+
       - name: Run tests
         run: go test ./...
 
@@ -26,8 +45,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          go build -o dist/grok2api-go-linux-amd64 ./cmd/server
-          GOOS=windows GOARCH=amd64 go build -o dist/grok2api-go-windows-amd64.exe ./cmd/server
+          LDFLAGS="-X github.com/ddmww/grok2api-go/internal/platform/version.Current=${{ steps.meta.outputs.version }} -X github.com/ddmww/grok2api-go/internal/platform/version.Commit=${{ steps.meta.outputs.commit }} -X github.com/ddmww/grok2api-go/internal/platform/version.ImageTag=${{ steps.meta.outputs.image_tag }} -X github.com/ddmww/grok2api-go/internal/platform/version.BuildTime=${{ steps.meta.outputs.build_time }}"
+          go build -ldflags "$LDFLAGS" -o dist/grok2api-go-linux-amd64 ./cmd/server
+          GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/grok2api-go-windows-amd64.exe ./cmd/server
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -36,4 +56,10 @@ jobs:
           path: dist/*
 
       - name: Validate Docker build
-        run: docker build -t grok2api-go:test .
+        run: |
+          docker build \
+            --build-arg VERSION=${{ steps.meta.outputs.version }} \
+            --build-arg COMMIT=${{ steps.meta.outputs.commit }} \
+            --build-arg IMAGE_TAG=${{ steps.meta.outputs.image_tag }} \
+            --build-arg BUILD_TIME=${{ steps.meta.outputs.build_time }} \
+            -t grok2api-go:test .

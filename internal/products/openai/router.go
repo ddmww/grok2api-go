@@ -53,6 +53,31 @@ type streamResult struct {
 }
 
 func Mount(router *gin.Engine, state *app.State) {
+	v1Public := router.Group("/v1")
+	{
+		v1Public.GET("/files/image", func(c *gin.Context) {
+			id := strings.TrimSpace(c.Query("id"))
+			path, contentType := localFilePath(paths.ImageCacheDir(), id)
+			if path == "" {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "image not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.Header("Content-Type", contentType)
+			c.File(path)
+		})
+
+		v1Public.GET("/files/video", func(c *gin.Context) {
+			id := strings.TrimSpace(c.Query("id"))
+			path, contentType := localFilePath(paths.VideoCacheDir(), id)
+			if path == "" {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "video not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.Header("Content-Type", contentType)
+			c.File(path)
+		})
+	}
+
 	v1 := router.Group("/v1")
 	v1.Use(auth.APIKey(state.Config))
 	{
@@ -369,27 +394,6 @@ func Mount(router *gin.Engine, state *app.State) {
 			c.File(job.ContentPath)
 		})
 
-		v1.GET("/files/image", func(c *gin.Context) {
-			id := strings.TrimSpace(c.Query("id"))
-			path, contentType := localFilePath(paths.ImageCacheDir(), id)
-			if path == "" {
-				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "image not found", "type": "invalid_request_error"}})
-				return
-			}
-			c.Header("Content-Type", contentType)
-			c.File(path)
-		})
-
-		v1.GET("/files/video", func(c *gin.Context) {
-			id := strings.TrimSpace(c.Query("id"))
-			path, contentType := localFilePath(paths.VideoCacheDir(), id)
-			if path == "" {
-				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "video not found", "type": "invalid_request_error"}})
-				return
-			}
-			c.Header("Content-Type", contentType)
-			c.File(path)
-		})
 	}
 }
 

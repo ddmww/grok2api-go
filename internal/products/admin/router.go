@@ -35,7 +35,7 @@ type updateService interface {
 }
 
 var newUpdateService = func() updateService {
-	return updatecheck.NewService(version.Current, "ddmww", "grok2api-go")
+	return updatecheck.NewService(version.CleanVersion(), version.CleanCommit(), version.CleanImageTag(), "dmwdmw", "grok2api-go")
 }
 
 var (
@@ -60,7 +60,14 @@ func Mount(router *gin.Engine, state *app.State) {
 	router.StaticFile("/favicon.ico", filepath.Join(paths.StaticDir(), "favicon.ico"))
 
 	router.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/admin") })
-	router.GET("/meta", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Current}) })
+	router.GET("/meta", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"version":    version.CleanVersion(),
+			"commit":     version.CleanCommit(),
+			"image_tag":  version.CleanImageTag(),
+			"build_time": version.BuildTime,
+		})
+	})
 	router.GET("/meta/update", func(c *gin.Context) {
 		c.JSON(http.StatusOK, updater.GetLatestReleaseInfo(c.Request.Context(), c.Query("force") == "true"))
 	})
