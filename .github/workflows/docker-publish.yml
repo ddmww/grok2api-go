@@ -55,7 +55,7 @@ jobs:
         if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         id: meta-dockerhub
         with:
-          images: docker.io/ddmww/grok2api-go
+          images: docker.io/dmwdmw/grok2api-go
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
