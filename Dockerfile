@@ -1,4 +1,7 @@
-FROM golang:1.26.2-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.2-bookworm AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -10,7 +13,8 @@ COPY internal ./internal
 COPY web ./web
 COPY config.defaults.toml ./
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/grok2api-go ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/grok2api-go ./cmd/server
 
 FROM debian:bookworm-slim
 

@@ -160,6 +160,17 @@ func TestAdminRoutes(t *testing.T) {
 
 	resp = doJSON(http.MethodPost, "/admin/api/config", map[string]any{
 		"proxy": map[string]any{
+			"egress": map[string]any{
+				"mode": "direct",
+			},
+		},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("config reset failed: %d %s", resp.Code, resp.Body.String())
+	}
+
+	resp = doJSON(http.MethodPost, "/admin/api/config", map[string]any{
+		"proxy": map[string]any{
 			"cf_clearance": " abc \u200d 123 ",
 			"user_agent":   " test\u2014agent ",
 		},

@@ -221,9 +221,15 @@ func Mount(router *gin.Engine, state *app.State) {
 				return
 			}
 			if syncAutoDetect {
-				_, err = state.Refresh.RefreshTokens(c.Request.Context(), newTokens)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				refreshResult, refreshErr := state.Refresh.RefreshTokens(c.Request.Context(), newTokens)
+				if refreshErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": refreshErr.Error()})
+					return
+				}
+				if refreshResult.Refreshed != len(newTokens) {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"message": fmt.Sprintf("auto-detect refresh incomplete: refreshed %d of %d tokens", refreshResult.Refreshed, len(newTokens)),
+					})
 					return
 				}
 			} else {
