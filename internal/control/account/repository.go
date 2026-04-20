@@ -432,7 +432,7 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	}
 	summary.NSFW["all"] = nsfwAll
 	var nsfwEnabled int64
-	if err := countInto(nsfwScope.Where(tagsContainsClause(), tagsLikePattern("nsfw")), &nsfwEnabled); err != nil {
+	if err := countInto(nsfwScope.Where(tagsContainsClause(r.storageType), tagsLikePattern("nsfw")), &nsfwEnabled); err != nil {
 		return Summary{}, err
 	}
 	summary.NSFW["enabled"] = nsfwEnabled
@@ -459,13 +459,13 @@ func applyListQuery(db *gorm.DB, query ListQuery) *gorm.DB {
 		db = db.Where("status = ?", string(query.Status))
 	}
 	for _, tag := range NormalizeTags(query.Tags) {
-		db = db.Where(tagsContainsClause(), tagsLikePattern(tag))
+		db = db.Where(tagsContainsClause(storageTypeOf(db)), tagsLikePattern(tag))
 	}
 	switch strings.ToLower(strings.TrimSpace(query.NSFW)) {
 	case "enabled":
-		db = db.Where(tagsContainsClause(), tagsLikePattern("nsfw"))
+		db = db.Where(tagsContainsClause(storageTypeOf(db)), tagsLikePattern("nsfw"))
 	case "disabled":
-		db = db.Where(tagsNotContainsClause(), tagsLikePattern("nsfw"))
+		db = db.Where(tagsNotContainsClause(storageTypeOf(db)), tagsLikePattern("nsfw"))
 	}
 	return db
 }
@@ -489,12 +489,22 @@ func countInto(db *gorm.DB, dest *int64) error {
 	return db.Count(dest).Error
 }
 
-func tagsContainsClause() string {
-	return `tags LIKE ? ESCAPE '\'`
+func tagsContainsClause(storageType string) string {
+	switch storageType {
+	case "mysql":
+		return "tags LIKE ? ESCAPE '\\\\'"
+	default:
+		return `tags LIKE ? ESCAPE '\'`
+	}
 }
 
-func tagsNotContainsClause() string {
-	return `(tags NOT LIKE ? ESCAPE '\' OR tags IS NULL OR tags = '')`
+func tagsNotContainsClause(storageType string) string {
+	switch storageType {
+	case "mysql":
+		return "(tags NOT LIKE ? ESCAPE '\\\\' OR tags IS NULL OR tags = '')"
+	default:
+		return `(tags NOT LIKE ? ESCAPE '\' OR tags IS NULL OR tags = '')`
+	}
 }
 
 func tagsLikePattern(tag string) string {
@@ -504,6 +514,13 @@ func tagsLikePattern(tag string) string {
 func escapeLike(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(value)
+}
+
+func storageTypeOf(db *gorm.DB) string {
+	if db == nil || db.Dialector == nil {
+		return ""
+	}
+	return db.Dialector.Name()
 }
 
 func quotaRemainingExpr(storageType, column string) string {
