@@ -15,6 +15,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/model"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
+	"github.com/ddmww/grok2api-go/internal/platform/tokens"
 	"github.com/ddmww/grok2api-go/internal/platform/upstreamblocker"
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +41,7 @@ type runResult struct {
 	searchSources []map[string]any
 	inputTokens   int
 	outputTokens  int
+	usage         map[string]any
 }
 
 type toolCall struct {
@@ -118,10 +120,7 @@ func Mount(router *gin.Engine, state *app.State) {
 			"content":       content,
 			"stop_reason":   stopReason,
 			"stop_sequence": nil,
-			"usage": map[string]any{
-				"input_tokens":  result.inputTokens,
-				"output_tokens": result.outputTokens,
-			},
+			"usage":         anthropicUsage(result),
 		}
 		if len(result.searchSources) > 0 {
 			response["search_sources"] = result.searchSources
@@ -152,7 +151,7 @@ func streamMessages(c *gin.Context, state *app.State, spec model.Spec, request m
 			"role":    "assistant",
 			"model":   spec.Name,
 			"content": []map[string]any{},
-			"usage":   map[string]any{"input_tokens": result.inputTokens, "output_tokens": 0},
+			"usage":   map[string]any{"input_tokens": anthropicInputTokens(result), "output_tokens": 0},
 		},
 	})
 	blockIndex := 0
@@ -203,7 +202,7 @@ func streamMessages(c *gin.Context, state *app.State, spec model.Spec, request m
 		_ = writeEvent(c, "message_delta", map[string]any{
 			"type":  "message_delta",
 			"delta": msgDelta,
-			"usage": map[string]any{"output_tokens": result.outputTokens},
+			"usage": map[string]any{"output_tokens": anthropicOutputTokens(result)},
 		})
 	} else {
 		_ = writeEvent(c, "content_block_start", map[string]any{
@@ -231,7 +230,7 @@ func streamMessages(c *gin.Context, state *app.State, spec model.Spec, request m
 		_ = writeEvent(c, "message_delta", map[string]any{
 			"type":  "message_delta",
 			"delta": msgDelta,
-			"usage": map[string]any{"output_tokens": result.outputTokens},
+			"usage": map[string]any{"output_tokens": anthropicOutputTokens(result)},
 		})
 	}
 	_ = writeEvent(c, "message_stop", map[string]any{"type": "message_stop"})
@@ -249,7 +248,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
-	inputTokens := len(strings.Fields(message))
+	inputTokens := tokens.EstimateText(message)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := state.Runtime.ReserveWithExclude(spec, excluded)
@@ -300,12 +299,60 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		}
 		result.searchSources = adapter.SearchSourcesList()
 		if result.outputTokens == 0 {
-			result.outputTokens = len(strings.Fields(result.content)) + len(strings.Fields(result.reasoning))
+			result.outputTokens = tokens.EstimateText(result.content) + tokens.EstimateText(result.reasoning)
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		return result, nil
 	}
 	return runResult{}, fmt.Errorf("no available accounts for this model tier")
+}
+
+func anthropicUsage(result runResult) map[string]any {
+	return map[string]any{
+		"input_tokens":  anthropicInputTokens(result),
+		"output_tokens": anthropicOutputTokens(result),
+	}
+}
+
+func anthropicInputTokens(result runResult) int {
+	if len(result.usage) > 0 {
+		if value := anthropicUsageInt(result.usage["input_tokens"]); value > 0 {
+			return value
+		}
+		if value := anthropicUsageInt(result.usage["prompt_tokens"]); value > 0 {
+			return value
+		}
+	}
+	return result.inputTokens
+}
+
+func anthropicOutputTokens(result runResult) int {
+	if len(result.usage) > 0 {
+		if value := anthropicUsageInt(result.usage["output_tokens"]); value > 0 {
+			return value
+		}
+		if value := anthropicUsageInt(result.usage["completion_tokens"]); value > 0 {
+			return value
+		}
+	}
+	return result.outputTokens
+}
+
+func anthropicUsageInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 func parseAnthropicMessages(messages []map[string]any, system any) []map[string]any {

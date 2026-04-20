@@ -56,6 +56,13 @@ var (
 
 const tokenImportBatchSize = 1000
 
+var availableModelsCache = struct {
+	mu       sync.Mutex
+	revision int64
+	expires  time.Time
+	payload  gin.H
+}{}
+
 func Mount(router *gin.Engine, state *app.State) {
 	updater := newUpdateService()
 	router.StaticFS("/static", http.Dir(paths.StaticDir()))
@@ -84,14 +91,16 @@ func Mount(router *gin.Engine, state *app.State) {
 	api.Use(auth.AdminKey(state.Config))
 	{
 		api.GET("/verify", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "success"}) })
-		api.GET("/config", func(c *gin.Context) { c.JSON(http.StatusOK, state.Config.Raw()) })
+		api.GET("/config", func(c *gin.Context) {
+			c.JSON(http.StatusOK, normalizeAdminConfig(state.Config.Raw()))
+		})
 		api.POST("/config", func(c *gin.Context) {
 			var patch map[string]any
 			if err := c.ShouldBindJSON(&patch); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
-			patch = sanitizeAdminConfigPatch(patch)
+			patch = sanitizeAdminConfigPatch(state.Config.Raw(), patch)
 			if err := ensureRuntimePatchAllowed(patch); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
@@ -126,6 +135,11 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
+			summary, err := state.Repo.SummarizeAccounts(c.Request.Context(), query)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
 			items := make([]map[string]any, 0, len(page.Items))
 			for _, item := range page.Items {
 				items = append(items, serializeToken(item))
@@ -139,6 +153,7 @@ func Mount(router *gin.Engine, state *app.State) {
 				"page_size":   page.PageSize,
 				"total_pages": page.TotalPages,
 				"revision":    page.Revision,
+				"summary":     summary,
 			})
 		})
 		api.GET("/tokens/summary", func(c *gin.Context) {
@@ -672,6 +687,18 @@ func quotaPatch(record account.Record) map[string]account.QuotaWindow {
 }
 
 func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, error) {
+	revision, err := repo.GetRevision(ctx)
+	if err != nil {
+		return nil, err
+	}
+	availableModelsCache.mu.Lock()
+	if availableModelsCache.payload != nil && availableModelsCache.revision == revision && time.Now().Before(availableModelsCache.expires) {
+		payload := availableModelsCache.payload
+		availableModelsCache.mu.Unlock()
+		return payload, nil
+	}
+	availableModelsCache.mu.Unlock()
+
 	pageNum := 1
 	poolCounts := map[string]int{}
 	now := account.NowMS()
@@ -725,13 +752,19 @@ func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, e
 		})
 	}
 
-	return gin.H{
+	payload := gin.H{
 		"pools": gin.H{
 			"active": activePools,
 			"counts": poolCounts,
 		},
 		"groups": grouped,
-	}, nil
+	}
+	availableModelsCache.mu.Lock()
+	availableModelsCache.revision = revision
+	availableModelsCache.expires = time.Now().Add(15 * time.Second)
+	availableModelsCache.payload = payload
+	availableModelsCache.mu.Unlock()
+	return payload, nil
 }
 
 func modelAvailableForPools(spec model.Spec, pools []string) bool {
@@ -1255,27 +1288,48 @@ func sanitizeProxyConfig(payload map[string]any) map[string]any {
 	return next
 }
 
-func sanitizeAdminConfigPatch(payload map[string]any) map[string]any {
+func normalizeAdminConfig(payload map[string]any) map[string]any {
 	next := sanitizeProxyConfig(payload)
-	return syncUpstreamBlockerConfigPatch(next)
+	return syncUpstreamBlockerConfigPatch(nil, next)
 }
 
-func syncUpstreamBlockerConfigPatch(payload map[string]any) map[string]any {
+func sanitizeAdminConfigPatch(current map[string]any, payload map[string]any) map[string]any {
+	next := sanitizeProxyConfig(payload)
+	return syncUpstreamBlockerConfigPatch(current, next)
+}
+
+func syncUpstreamBlockerConfigPatch(current map[string]any, payload map[string]any) map[string]any {
 	if payload == nil {
 		return nil
 	}
 	next := cloneMapAny(payload)
+	currentBlocker := map[string]any{}
+	if rawCurrent, ok := current["upstream_blocker"].(map[string]any); ok {
+		currentBlocker = cloneMapAny(rawCurrent)
+	}
+
 	rawBlocker, exists := next["upstream_blocker"]
 	if !exists {
-		return next
+		if len(currentBlocker) == 0 {
+			return next
+		}
+		rawBlocker = currentBlocker
+		exists = true
 	}
-	blocker, ok := rawBlocker.(map[string]any)
+
+	blockerPatch, ok := rawBlocker.(map[string]any)
 	if !ok {
 		return next
 	}
+	blocker := currentBlocker
+	if blocker == nil {
+		blocker = map[string]any{}
+	}
+	mergeMapAny(blocker, blockerPatch)
+
 	keywords := upstreamblocker.NormalizeKeywords(blocker["keywords"])
-	message := strings.TrimSpace(fmt.Sprint(blocker["message"]))
-	if message == "" {
+	message := normalizeUpstreamBlockerMessage(blocker["message"])
+	if message == "" || message == "<nil>" {
 		message = upstreamblocker.DefaultMessage
 	}
 	normalized := map[string]any{
@@ -1287,11 +1341,38 @@ func syncUpstreamBlockerConfigPatch(payload map[string]any) map[string]any {
 	if normalized["enabled"].(bool) && len(keywords) == 0 {
 		normalized["__validation_error"] = "启用上游拦截时，至少需要配置一个关键词。"
 	}
-	if blocker["enabled"] == true && strings.TrimSpace(fmt.Sprint(blocker["message"])) == "" {
+	if normalized["enabled"].(bool) && normalizeUpstreamBlockerMessage(blocker["message"]) == "" {
 		normalized["__validation_error"] = "上游拦截提示文案不能为空。"
 	}
 	next["upstream_blocker"] = normalized
 	return next
+}
+
+func normalizeUpstreamBlockerMessage(value any) string {
+	if value == nil {
+		return ""
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func mergeMapAny(dst map[string]any, src map[string]any) {
+	for key, value := range src {
+		child, ok := value.(map[string]any)
+		if !ok {
+			dst[key] = value
+			continue
+		}
+		existing, ok := dst[key].(map[string]any)
+		if !ok {
+			dst[key] = cloneMapAny(child)
+			continue
+		}
+		mergeMapAny(existing, child)
+	}
 }
 
 func ensureRuntimePatchAllowed(payload map[string]any) error {

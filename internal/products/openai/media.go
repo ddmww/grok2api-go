@@ -328,7 +328,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 				contentParts = append(contentParts, b64)
 			}
 		}
-		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil), nil
+		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil, nil), nil
 	}
 	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 }
@@ -370,7 +370,7 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 				contentParts = append(contentParts, fmt.Sprintf("![image](%s)", urlValue))
 			}
 		}
-		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), "", nil), nil
+		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), "", nil, nil), nil
 	}
 	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 }
@@ -460,7 +460,7 @@ func getVideoJob(id string) *videoJob {
 
 func videoChatResponse(spec model.Spec, raw map[string]any) map[string]any {
 	b, _ := json.Marshal(raw)
-	return chatResponse(spec.Name, string(b), "", nil)
+	return chatResponse(spec.Name, string(b), "", nil, nil)
 }
 
 func localFilePath(dir, id string) (string, string) {

@@ -1303,7 +1303,7 @@ async function _api(method, path, body) {
 // ── Load ───────────────────────────────────────────────────────────────────
 async function load() {
   try {
-    await loadAccountView({ includeSummary: true, includeModels: true });
+    await loadAccountView({ includeModels: true });
     render();
   } catch (e) { showToast(`${tr('account.loadFailed', null, '加载失败')}: ${e.message}`, 'error'); }
 }
@@ -1575,7 +1575,7 @@ function switchStatus(status) {
     curStatus = status || 'all';
     curPage = 1;
     clearSelectionState();
-    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
+    loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
   });
 }
 function switchNsfw(mode) {
@@ -1583,7 +1583,7 @@ function switchNsfw(mode) {
     curNsfw = mode || 'all';
     curPage = 1;
     clearSelectionState();
-    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
+    loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
   });
 }
 function switchPool(pool) {
@@ -1591,20 +1591,20 @@ function switchPool(pool) {
     curPool = pool || 'all';
     curPage = 1;
     clearSelectionState();
-    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
+    loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
   });
 }
 function prevPage() {
   if (curPage > 1) {
     curPage--;
-    loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
+    loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
   }
 }
 function nextPage() {
   const pages = Math.max(1, tableTotalPages || 1);
   if (curPage < pages) {
     curPage++;
-    loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
+    loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
   }
 }
 function changePageSize(v) {
@@ -1612,7 +1612,7 @@ function changePageSize(v) {
   pageSize = PAGE_SIZE_OPTIONS.includes(next) ? next : 50;
   localStorage.setItem(PAGE_SIZE_KEY, String(pageSize));
   curPage = 1;
-  loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
+  loadAccountView({ includeModels: false }).then(render).catch(handleLoadError);
 }
 
 function toggleAll(checked) {
@@ -1723,13 +1723,11 @@ function currentQueryParams(overrides = {}) {
   return params;
 }
 async function loadAccountView(options = {}) {
-  const includeSummary = options.includeSummary !== false;
   const includeModels = options.includeModels === true;
   const query = currentQueryParams().toString();
   const tasks = [
     _api('GET', `/tokens?${query}`),
   ];
-  if (includeSummary) tasks.push(_api('GET', `/tokens/summary?${query}`));
   if (includeModels) tasks.push(_api('GET', '/models'));
   const results = await Promise.all(tasks);
 
@@ -1740,11 +1738,7 @@ async function loadAccountView(options = {}) {
   tableTotal = Number(tokensData.total || 0);
   tableTotalPages = Number(tokensData.total_pages || 1) || 1;
   tableRevision = Number(tokensData.revision || 0);
-
-  if (includeSummary) {
-    const summaryData = results.shift();
-    summaryState = summaryData.summary || emptySummary();
-  }
+  summaryState = tokensData.summary || emptySummary();
   if (includeModels) {
     const modelsData = results.shift();
     availableModels = modelsData.groups || { chat: [], image: [], image_edit: [], video: [] };

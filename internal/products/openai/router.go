@@ -17,7 +17,6 @@ import (
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
-	"github.com/ddmww/grok2api-go/internal/platform/tokens"
 	"github.com/ddmww/grok2api-go/internal/platform/upstreamblocker"
 	"github.com/gin-gonic/gin"
 )
@@ -50,6 +49,7 @@ type streamResult struct {
 	toolCalls     []ParsedToolCall
 	annotations   []map[string]any
 	searchSources []map[string]any
+	usage         map[string]any
 }
 
 func Mount(router *gin.Engine, state *app.State) {
@@ -180,10 +180,10 @@ func Mount(router *gin.Engine, state *app.State) {
 				return
 			}
 			if len(result.toolCalls) > 0 {
-				c.JSON(http.StatusOK, chatToolResponse(spec.Name, result.toolCalls, request.Messages))
+				c.JSON(http.StatusOK, chatToolResponse(spec.Name, result.toolCalls, request.Messages, result.usage))
 				return
 			}
-			response := chatResponse(spec.Name, result.content, result.reasoning, request.Messages)
+			response := chatResponse(spec.Name, result.content, result.reasoning, request.Messages, result.usage)
 			if choices, ok := response["choices"].([]map[string]any); ok && len(choices) > 0 {
 				if message, ok := choices[0]["message"].(map[string]any); ok {
 					if len(result.annotations) > 0 {
@@ -226,7 +226,6 @@ func Mount(router *gin.Engine, state *app.State) {
 				return
 			}
 			respID := responseID("resp")
-			promptTokens := tokens.EstimateAny(messages)
 			if len(result.toolCalls) > 0 {
 				output := []map[string]any{}
 				for _, call := range result.toolCalls {
@@ -239,7 +238,7 @@ func Mount(router *gin.Engine, state *app.State) {
 						"status":    "completed",
 					})
 				}
-				response := responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0))
+				response := responsesObject(respID, spec.Name, "completed", output, responsesToolUsageOrEstimate(result.usage, messages, len(output)))
 				if len(result.searchSources) > 0 {
 					response["search_sources"] = result.searchSources
 				}
@@ -259,7 +258,7 @@ func Mount(router *gin.Engine, state *app.State) {
 				"role":    "assistant",
 				"content": []map[string]any{contentItem},
 			}}
-			response := responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning)))
+			response := responsesObject(respID, spec.Name, "completed", output, responsesUsageOrEstimate(result.usage, messages, result.content, result.reasoning))
 			if len(result.searchSources) > 0 {
 				response["search_sources"] = result.searchSources
 			}
@@ -843,7 +842,6 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
-	promptTokens := tokens.EstimateAny(request.Messages)
 	thinkingEnabled := state.Config.GetBool("features.thinking", true)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -997,7 +995,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			"created": time.Now().Unix(),
 			"model":   spec.Name,
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
-			"usage":   buildUsage(promptTokens, tokens.EstimateText(result.content)+tokens.EstimateText(result.reasoning), tokens.EstimateText(result.reasoning)),
+			"usage":   chatUsageOrEstimate(result.usage, request.Messages, result.content, result.reasoning),
 		}
 		if len(result.annotations) > 0 {
 			finalChunk["annotations"] = result.annotations
@@ -1020,8 +1018,6 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
-	promptTokens := tokens.EstimateAny(messages)
-
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := reserveLease(state, spec, excluded)
 		if err != nil {
@@ -1136,7 +1132,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 				}
 				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 				refreshQuotaAsync(state, lease.Token)
-				response := responsesObject(id, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0))
+				response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(result.usage, messages, len(output)))
 				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
 					response["search_sources"] = sources
 				}
@@ -1170,7 +1166,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		refreshQuotaAsync(state, lease.Token)
-		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning)))
+		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(result.usage, messages, result.content, result.reasoning))
 		if len(result.searchSources) > 0 {
 			response["search_sources"] = result.searchSources
 		}
