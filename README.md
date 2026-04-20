@@ -49,6 +49,12 @@ ACCOUNT_MYSQL_URL='grok2api:grok2api@tcp(mysql:3306)/grok2api?charset=utf8mb4&pa
 docker compose --profile mysql up --build -d
 ```
 
+远端镜像：
+
+```bash
+docker pull ghcr.io/ddmww/grok2api-go:latest
+```
+
 ## 迁移
 
 - `ACCOUNT_STORAGE=mysql` 且目标库为空时，会自动尝试导入 `${ACCOUNT_LOCAL_PATH}` 指向的本地 SQLite
@@ -58,4 +64,4 @@ docker compose --profile mysql up --build -d
 ## CI / CD
 
 - `ci.yml`：`go test`、`go build`、`docker build`
-- `docker-publish.yml`：发布 `ghcr.io/ddmww/grok2api-go` 的 `linux/amd64` 与 `linux/arm64`
+- `docker-publish.yml`：`main` 分支自动更新 `ghcr.io/ddmww/grok2api-go:latest`，版本 tag 同时发布对应版本号镜像与多架构清单

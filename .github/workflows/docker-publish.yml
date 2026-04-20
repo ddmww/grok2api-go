@@ -2,6 +2,8 @@ name: Docker Publish
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -30,6 +32,7 @@ jobs:
         with:
           images: ghcr.io/ddmww/grok2api-go
           tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha
 
