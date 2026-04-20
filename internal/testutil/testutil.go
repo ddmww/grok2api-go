@@ -57,18 +57,28 @@ func (r *CloseNotifyRecorder) CloseNotify() <-chan bool {
 }
 
 type FakeGrokServer struct {
-	Server      *httptest.Server
-	mu          sync.Mutex
-	ChatContent string
-	Reasoning   string
-	Assets      []map[string]any
+	Server             *httptest.Server
+	mu                 sync.Mutex
+	ChatContent        string
+	Reasoning          string
+	Assets             []map[string]any
+	ImageURL           string
+	PartialImageURL    string
+	PreviewImageURL    string
+	VideoURL           string
+	AppChatImageMode   string
+	WebsocketImageMode string
+	ImageEditMode      string
 }
 
 func NewFakeGrokServer() *FakeGrokServer {
 	fake := &FakeGrokServer{
-		ChatContent: "Hello from fake grok",
-		Reasoning:   "thinking",
-		Assets:      []map[string]any{{"id": "asset-1"}, {"id": "asset-2"}},
+		ChatContent:        "Hello from fake grok",
+		Reasoning:          "thinking",
+		Assets:             []map[string]any{{"id": "asset-1"}, {"id": "asset-2"}},
+		AppChatImageMode:   "final",
+		WebsocketImageMode: "final",
+		ImageEditMode:      "final",
 	}
 
 	mux := http.NewServeMux()
@@ -82,7 +92,18 @@ func NewFakeGrokServer() *FakeGrokServer {
 	})
 	mux.HandleFunc("/rest/assets", fake.handleAssets)
 	mux.HandleFunc("/rest/assets-metadata/", fake.handleDeleteAsset)
+	mux.HandleFunc("/rest/app-chat/upload-file", fake.handleUpload)
+	mux.HandleFunc("/rest/media/post/create", fake.handleMediaPost)
+	mux.HandleFunc("/rest/media/post/create-link", fake.handleMediaLink)
+	mux.HandleFunc("/generated/image.png", fake.handleImage)
+	mux.HandleFunc("/generated/partial.png", fake.handleImage)
+	mux.HandleFunc("/generated/preview.png", fake.handleImage)
+	mux.HandleFunc("/generated/video.mp4", fake.handleVideo)
 	fake.Server = httptest.NewServer(mux)
+	fake.ImageURL = fake.Server.URL + "/generated/image.png"
+	fake.PartialImageURL = fake.Server.URL + "/generated/partial.png"
+	fake.PreviewImageURL = fake.Server.URL + "/generated/preview.png"
+	fake.VideoURL = fake.Server.URL + "/generated/video.mp4"
 	return fake
 }
 
@@ -104,10 +125,54 @@ func (f *FakeGrokServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	var payload map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&payload)
 	message, _ := payload["message"].(string)
+	modelName, _ := payload["modelName"].(string)
+	modeID, _ := payload["modeId"].(string)
+
+	if modelName == "imagine-image-edit" {
+		if strings.EqualFold(f.ImageEditMode, "rate_limit") {
+			http.Error(w, `{"error":"image rate limit exceeded"}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		progressURL := f.PartialImageURL
+		progressValue := 60
+		if strings.EqualFold(f.ImageEditMode, "final") {
+			progressURL = f.ImageURL
+			progressValue = 100
+		}
+		frame, _ := json.Marshal(map[string]any{
+			"result": map[string]any{
+				"response": map[string]any{
+					"streamingImageGenerationResponse": map[string]any{
+						"progress":   progressValue,
+						"imageUrl":   progressURL,
+						"assetId":    "uploaded-asset-1",
+						"imageIndex": 0,
+					},
+					"modelResponse": map[string]any{
+						"fileAttachments": []string{"uploaded-asset-1"},
+					},
+				},
+			},
+		})
+		done, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"finalMetadata": map[string]any{"complete": true}}}})
+		_, _ = w.Write([]byte("data: " + string(frame) + "\n\n"))
+		_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
+		return
+	}
+
+	if strings.HasPrefix(message, "Drawing:") || strings.Contains(strings.ToLower(modelName), "image") {
+		f.handleImageChat(w, message, modelName, modeID)
+		return
+	}
 
 	content := f.ChatContent
 	if strings.Contains(message, "call_tool") {
 		content = "<tool_calls><tool_call><tool_name>lookup_weather</tool_name><parameters>{\"city\":\"Shanghai\"}</parameters></tool_call></tool_calls>"
+	} else if strings.Contains(strings.ToLower(message), "video") || strings.Contains(strings.ToLower(modelName), "video") {
+		content = f.VideoURL
+	} else if strings.Contains(strings.ToLower(message), "image") || strings.Contains(strings.ToLower(message), "edit") || strings.Contains(strings.ToLower(modelName), "image") {
+		content = f.ImageURL
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -117,6 +182,69 @@ func (f *FakeGrokServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("data: " + string(thinking) + "\n\n"))
 	_, _ = w.Write([]byte("data: " + string(answer) + "\n\n"))
 	_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
+}
+
+func (f *FakeGrokServer) handleImageChat(w http.ResponseWriter, message, modelName, modeID string) {
+	channel := "websocket"
+	scenario := f.WebsocketImageMode
+	if strings.HasPrefix(message, "Drawing:") || modeID != "" {
+		channel = "app_chat"
+		scenario = f.AppChatImageMode
+	}
+	if strings.EqualFold(scenario, "rate_limit") {
+		http.Error(w, `{"error":"image rate limit exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	thinking, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"token": f.Reasoning, "isThinking": true}}})
+	_, _ = w.Write([]byte("data: " + string(thinking) + "\n\n"))
+
+	switch strings.ToLower(strings.TrimSpace(scenario)) {
+	case "partial":
+		_, _ = w.Write([]byte("data: " + string(f.imageFrame(channel, 60, f.PartialImageURL, false)) + "\n\n"))
+	case "preview":
+		_, _ = w.Write([]byte("data: " + string(f.imageFrame(channel, 20, f.PreviewImageURL, false)) + "\n\n"))
+	case "empty":
+	default:
+		_, _ = w.Write([]byte("data: " + string(f.imageFrame(channel, 100, f.ImageURL, true)) + "\n\n"))
+	}
+
+	done, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"finalMetadata": map[string]any{"complete": true}}}})
+	_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
+}
+
+func (f *FakeGrokServer) imageFrame(channel string, progress int, imageURL string, final bool) []byte {
+	response := map[string]any{}
+	imageID := "img-app"
+	if channel != "app_chat" {
+		imageID = "img-ws"
+	}
+	if channel == "app_chat" {
+		cardData, _ := json.Marshal(map[string]any{
+			"image_chunk": map[string]any{
+				"imageUuid": imageID,
+				"imageUrl":  imageURL,
+				"progress":  progress,
+			},
+		})
+		response["cardAttachment"] = map[string]any{"jsonData": string(cardData)}
+		if final {
+			response["token"] = imageURL
+		}
+	} else {
+		response["streamingImageGenerationResponse"] = map[string]any{
+			"imageUuid": imageID,
+			"imageUrl":  imageURL,
+			"url":       imageURL,
+			"progress":  progress,
+		}
+		if final {
+			response["modelResponse"] = map[string]any{"generatedImageUrls": []string{imageURL}}
+		}
+	}
+	frame, _ := json.Marshal(map[string]any{"result": map[string]any{"response": response}})
+	return frame
 }
 
 func (f *FakeGrokServer) handleRateLimits(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +286,47 @@ func (f *FakeGrokServer) handleDeleteAsset(w http.ResponseWriter, r *http.Reques
 	f.Assets = filtered
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *FakeGrokServer) handleUpload(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"fileMetadataId": "uploaded-asset-1",
+		"fileUri":        "/users/test/uploaded-asset-1/content",
+	})
+}
+
+func (f *FakeGrokServer) handleMediaPost(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"postId": "post-1",
+		"id":     "post-1",
+		"url":    f.VideoURL,
+	})
+}
+
+func (f *FakeGrokServer) handleMediaLink(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"url": f.VideoURL,
+	})
+}
+
+func (f *FakeGrokServer) handleImage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	_, _ = w.Write([]byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	})
+}
+
+func (f *FakeGrokServer) handleVideo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "video/mp4")
+	_, _ = w.Write([]byte("fake mp4 data"))
 }
 
 func cloneMap(values map[string]any) map[string]any {

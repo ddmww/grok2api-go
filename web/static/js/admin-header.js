@@ -537,7 +537,7 @@ window.renderAdminHeader = async function renderAdminHeader() {
       <header class="admin-header">
         <div class="admin-header-inner">
           <div class="admin-brand-wrap">
-            <a href="https://github.com/chenyme/grok2api" target="_blank" rel="noopener" class="admin-brand-link">
+        <a href="https://github.com/ddmww/grok2api-go" target="_blank" rel="noopener" class="admin-brand-link">
               <span class="admin-brand">Grok2API</span>
             </a>
             <a href="https://blog.cheny.me/" target="_blank" rel="noopener" class="admin-username" id="hd-user">@Chenyme</a>

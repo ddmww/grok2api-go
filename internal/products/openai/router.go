@@ -2,10 +2,12 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +16,9 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/model"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
+	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tokens"
+	"github.com/ddmww/grok2api-go/internal/platform/upstreamblocker"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,6 +31,8 @@ type chatRequest struct {
 	Temperature     *float64         `json:"temperature"`
 	TopP            *float64         `json:"top_p"`
 	ReasoningEffort string           `json:"reasoning_effort"`
+	ImageConfig     *imageConfig     `json:"image_config"`
+	VideoConfig     *videoConfig     `json:"video_config"`
 }
 
 type responsesRequest struct {
@@ -39,9 +45,11 @@ type responsesRequest struct {
 }
 
 type streamResult struct {
-	content   string
-	reasoning string
-	toolCalls []ParsedToolCall
+	content       string
+	reasoning     string
+	toolCalls     []ParsedToolCall
+	annotations   []map[string]any
+	searchSources []map[string]any
 }
 
 func Mount(router *gin.Engine, state *app.State) {
@@ -91,6 +99,48 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "unknown model", "type": "invalid_request_error"}})
 				return
 			}
+			if spec.IsImage() {
+				cfg, err := normalizeImageConfig(derefImageConfig(request.ImageConfig), spec.Name, false)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+					return
+				}
+				result, err := generateImages(c.Request.Context(), state, spec, extractPromptFromMessages(request.Messages), cfg, true)
+				if err != nil {
+					writeOpenAIError(c, err)
+					return
+				}
+				c.JSON(http.StatusOK, result)
+				return
+			}
+			if spec.IsImageEdit() {
+				cfg, err := normalizeImageConfig(derefImageConfig(request.ImageConfig), spec.Name, true)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+					return
+				}
+				result, err := editImages(c.Request.Context(), state, spec, request.Messages, cfg, true)
+				if err != nil {
+					writeOpenAIError(c, err)
+					return
+				}
+				c.JSON(http.StatusOK, result)
+				return
+			}
+			if spec.IsVideo() {
+				cfg, err := normalizeVideoConfig(derefVideoConfig(request.VideoConfig))
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+					return
+				}
+				result, err := createVideo(c.Request.Context(), state, spec, extractPromptFromMessages(request.Messages), cfg)
+				if err != nil {
+					writeOpenAIError(c, err)
+					return
+				}
+				c.JSON(http.StatusOK, videoChatResponse(spec, result))
+				return
+			}
 			if request.Stream {
 				streamChat(c, state, spec, request)
 				return
@@ -100,11 +150,26 @@ func Mount(router *gin.Engine, state *app.State) {
 				writeOpenAIError(c, err)
 				return
 			}
+			if err := upstreamblocker.AssertResponseAllowed(upstreamblocker.GetConfig(state.Config), result.content, "/v1/chat/completions"); err != nil {
+				writeOpenAIError(c, err)
+				return
+			}
 			if len(result.toolCalls) > 0 {
 				c.JSON(http.StatusOK, chatToolResponse(spec.Name, result.toolCalls, request.Messages))
 				return
 			}
-			c.JSON(http.StatusOK, chatResponse(spec.Name, result.content, result.reasoning, request.Messages))
+			response := chatResponse(spec.Name, result.content, result.reasoning, request.Messages)
+			if choices, ok := response["choices"].([]map[string]any); ok && len(choices) > 0 {
+				if message, ok := choices[0]["message"].(map[string]any); ok {
+					if len(result.annotations) > 0 {
+						message["annotations"] = result.annotations
+					}
+				}
+			}
+			if len(result.searchSources) > 0 {
+				response["search_sources"] = result.searchSources
+			}
+			c.JSON(http.StatusOK, response)
 		})
 
 		v1.POST("/responses", func(c *gin.Context) {
@@ -131,6 +196,10 @@ func Mount(router *gin.Engine, state *app.State) {
 				writeOpenAIError(c, err)
 				return
 			}
+			if err := upstreamblocker.AssertResponseAllowed(upstreamblocker.GetConfig(state.Config), result.content, "/v1/responses"); err != nil {
+				writeOpenAIError(c, err)
+				return
+			}
 			respID := responseID("resp")
 			promptTokens := tokens.EstimateAny(messages)
 			if len(result.toolCalls) > 0 {
@@ -145,21 +214,204 @@ func Mount(router *gin.Engine, state *app.State) {
 						"status":    "completed",
 					})
 				}
-				c.JSON(http.StatusOK, responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0)))
+				response := responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0))
+				if len(result.searchSources) > 0 {
+					response["search_sources"] = result.searchSources
+				}
+				c.JSON(http.StatusOK, response)
 				return
 			}
+			contentItem := map[string]any{
+				"type": "output_text",
+				"text": result.content,
+			}
+			if len(result.annotations) > 0 {
+				contentItem["annotations"] = result.annotations
+			}
 			output := []map[string]any{{
-				"id":   responseID("msg"),
-				"type": "message",
-				"role": "assistant",
-				"content": []map[string]any{{
-					"type": "output_text",
-					"text": result.content,
-				}},
+				"id":      responseID("msg"),
+				"type":    "message",
+				"role":    "assistant",
+				"content": []map[string]any{contentItem},
 			}}
-			c.JSON(http.StatusOK, responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning))))
+			response := responsesObject(respID, spec.Name, "completed", output, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning)))
+			if len(result.searchSources) > 0 {
+				response["search_sources"] = result.searchSources
+			}
+			c.JSON(http.StatusOK, response)
+		})
+
+		v1.POST("/images/generations", func(c *gin.Context) {
+			var payload struct {
+				Model          string `json:"model"`
+				Prompt         string `json:"prompt"`
+				N              int    `json:"n"`
+				Size           string `json:"size"`
+				ResponseFormat string `json:"response_format"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			spec, ok := model.Get(payload.Model)
+			if !ok || !spec.IsImage() {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": fmt.Sprintf("Model %q is not an image model", payload.Model), "type": "invalid_request_error"}})
+				return
+			}
+			cfg, err := normalizeImageConfig(imageConfig{N: payload.N, Size: payload.Size, ResponseFormat: payload.ResponseFormat}, spec.Name, false)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			result, err := generateImages(c.Request.Context(), state, spec, payload.Prompt, cfg, false)
+			if err != nil {
+				writeOpenAIError(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, result)
+		})
+
+		v1.POST("/images/edits", func(c *gin.Context) {
+			modelName := strings.TrimSpace(c.PostForm("model"))
+			prompt := c.PostForm("prompt")
+			n, _ := strconv.Atoi(defaultIfEmpty(c.PostForm("n"), "1"))
+			spec, ok := model.Get(modelName)
+			if !ok || !spec.IsImageEdit() {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": fmt.Sprintf("Model %q is not an image-edit model", modelName), "type": "invalid_request_error"}})
+				return
+			}
+			if strings.TrimSpace(c.PostForm("mask")) != "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "mask is not supported yet", "type": "invalid_request_error"}})
+				return
+			}
+			cfg, err := normalizeImageConfig(imageConfig{N: n, Size: defaultIfEmpty(c.PostForm("size"), "1024x1024"), ResponseFormat: defaultIfEmpty(c.PostForm("response_format"), "url")}, spec.Name, true)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			form, err := c.MultipartForm()
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			files := append(form.File["image[]"], form.File["image"]...)
+			content := []map[string]any{{"type": "text", "text": prompt}}
+			for _, file := range files {
+				handle, err := file.Open()
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+					return
+				}
+				data, readErr := io.ReadAll(handle)
+				_ = handle.Close()
+				if readErr != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": readErr.Error(), "type": "invalid_request_error"}})
+					return
+				}
+				mimeType := file.Header.Get("Content-Type")
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				content = append(content, map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)},
+				})
+			}
+			result, err := editImages(c.Request.Context(), state, spec, []map[string]any{{"role": "user", "content": content}}, cfg, false)
+			if err != nil {
+				writeOpenAIError(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, result)
+		})
+
+		v1.POST("/videos", func(c *gin.Context) {
+			modelName := defaultIfEmpty(strings.TrimSpace(c.PostForm("model")), "grok-imagine-video")
+			spec, ok := model.Get(modelName)
+			if !ok || !spec.IsVideo() {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": fmt.Sprintf("Model %q is not a video model", modelName), "type": "invalid_request_error"}})
+				return
+			}
+			seconds, _ := strconv.Atoi(defaultIfEmpty(c.PostForm("seconds"), "6"))
+			cfg, err := normalizeVideoConfig(videoConfig{
+				Seconds:        seconds,
+				Size:           defaultIfEmpty(c.PostForm("size"), "720x1280"),
+				ResolutionName: c.PostForm("resolution_name"),
+				Preset:         c.PostForm("preset"),
+			})
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			result, err := createVideo(c.Request.Context(), state, spec, c.PostForm("prompt"), cfg)
+			if err != nil {
+				writeOpenAIError(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, result)
+		})
+
+		v1.GET("/videos/:id", func(c *gin.Context) {
+			job := getVideoJob(c.Param("id"))
+			if job == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "video not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.JSON(http.StatusOK, job.toMap())
+		})
+
+		v1.GET("/videos/:id/content", func(c *gin.Context) {
+			job := getVideoJob(c.Param("id"))
+			if job == nil || job.ContentPath == "" {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "video content not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.File(job.ContentPath)
+		})
+
+		v1.GET("/files/image", func(c *gin.Context) {
+			id := strings.TrimSpace(c.Query("id"))
+			path, contentType := localFilePath(paths.ImageCacheDir(), id)
+			if path == "" {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "image not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.Header("Content-Type", contentType)
+			c.File(path)
+		})
+
+		v1.GET("/files/video", func(c *gin.Context) {
+			id := strings.TrimSpace(c.Query("id"))
+			path, contentType := localFilePath(paths.VideoCacheDir(), id)
+			if path == "" {
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"message": "video not found", "type": "invalid_request_error"}})
+				return
+			}
+			c.Header("Content-Type", contentType)
+			c.File(path)
 		})
 	}
+}
+
+func derefImageConfig(cfg *imageConfig) imageConfig {
+	if cfg == nil {
+		return imageConfig{}
+	}
+	return *cfg
+}
+
+func derefVideoConfig(cfg *videoConfig) videoConfig {
+	if cfg == nil {
+		return videoConfig{}
+	}
+	return *cfg
+}
+
+func defaultIfEmpty(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func availableForPools(spec model.Spec, pools []string) bool {
@@ -174,31 +426,121 @@ func availableForPools(spec model.Spec, pools []string) bool {
 }
 
 func writeOpenAIError(c *gin.Context, err error) {
-	status := http.StatusInternalServerError
 	message := err.Error()
-	if upstream, ok := err.(interface{ Error() string }); ok {
-		message = upstream.Error()
+	status := httpStatusForError(err)
+	errorType := openAIErrorType(status)
+	errorCode := ""
+	if blocked, ok := err.(*upstreamblocker.Error); ok {
+		message = blocked.Error()
+		errorType = "upstream_blocked"
+		errorCode = "upstream_blocked"
 	}
-	if strings.Contains(strings.ToLower(message), "no available accounts") {
-		status = http.StatusTooManyRequests
+	if upstream, ok := err.(*xai.UpstreamError); ok && upstream.Status == http.StatusForbidden && strings.TrimSpace(upstream.Body) == "" {
+		message = "Upstream returned 403 (challenge or permission denied)"
 	}
-	c.JSON(status, gin.H{"error": gin.H{"message": message, "type": "server_error"}})
+	body := gin.H{"message": message, "type": errorType}
+	if errorCode != "" {
+		body["code"] = errorCode
+	}
+	c.JSON(status, gin.H{"error": body})
 }
 
-func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) (streamResult, error) {
-	lease, err := state.Runtime.Reserve(spec)
-	if err != nil {
-		return streamResult{}, err
+func openAIErrorType(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		return "server_error"
 	}
-	defer state.Runtime.Release(lease.Token)
+}
 
-	message := flattenMessages(messages)
-	toolNames := []string{}
-	if len(tools) > 0 {
-		message = injectToolPrompt(message, buildToolSystemPrompt(tools, toolChoice))
-		toolNames = extractToolNames(tools)
+func httpStatusForError(err error) int {
+	if err == nil {
+		return http.StatusOK
 	}
-	payload := map[string]any{
+	if upstream, ok := err.(*xai.UpstreamError); ok {
+		switch upstream.Status {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusTooManyRequests:
+			return upstream.Status
+		default:
+			if upstream.Status >= 500 && upstream.Status <= 599 {
+				return http.StatusBadGateway
+			}
+		}
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "no available accounts") {
+		return http.StatusTooManyRequests
+	}
+	if _, ok := err.(*upstreamblocker.Error); ok {
+		return http.StatusForbidden
+	}
+	return http.StatusInternalServerError
+}
+
+func parseRetryCodes(raw string) map[int]struct{} {
+	out := map[int]struct{}{}
+	for _, part := range strings.Split(raw, ",") {
+		value, err := strconv.Atoi(strings.TrimSpace(part))
+		if err == nil {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func shouldRetry(err error, retryCodes map[int]struct{}, attempt, maxRetries int) bool {
+	if attempt >= maxRetries {
+		return false
+	}
+	upstream, ok := err.(*xai.UpstreamError)
+	if !ok {
+		return false
+	}
+	if isInvalidCredentialsError(upstream) {
+		return true
+	}
+	_, retry := retryCodes[upstream.Status]
+	return retry
+}
+
+func reserveLease(state *app.State, spec model.Spec, excluded map[string]struct{}) (*account.Lease, error) {
+	return state.Runtime.ReserveWithExclude(spec, excluded)
+}
+
+func feedbackForError(err error) account.Feedback {
+	feedback := account.Feedback{Kind: account.FeedbackServerError, Reason: err.Error()}
+	if upstream, ok := err.(*xai.UpstreamError); ok {
+		switch upstream.Status {
+		case http.StatusUnauthorized:
+			feedback.Kind = account.FeedbackUnauthorized
+		case http.StatusForbidden:
+			feedback.Kind = account.FeedbackForbidden
+		case http.StatusTooManyRequests:
+			feedback.Kind = account.FeedbackRateLimited
+		}
+	}
+	return feedback
+}
+
+func refreshQuotaAsync(state *app.State, token string) {
+	if state == nil || state.Refresh == nil || strings.TrimSpace(token) == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = state.Refresh.RefreshTokens(ctx, []string{token})
+	}()
+}
+
+func buildReversePayload(state *app.State, spec model.Spec, message string) map[string]any {
+	return map[string]any{
 		"collectionIds":               []string{},
 		"connectors":                  []string{},
 		"deviceEnvInfo":               map[string]any{"darkModeEnabled": false, "devicePixelRatio": 2, "screenHeight": 1329, "screenWidth": 2056, "viewportHeight": 1083, "viewportWidth": 2056},
@@ -231,65 +573,122 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			"googleDriveSearch":     false,
 		},
 	}
-	lines, errCh := state.XAI.ChatStream(ctx, lease.Token, payload)
-	result := streamResult{}
-	for line := range lines {
-		kind, data := classifyLine(line)
-		if kind != "data" {
-			continue
-		}
-		content, reasoning, stop := parseChatData(data)
-		if reasoning != "" {
-			result.reasoning += reasoning
-		}
-		if content != "" {
-			result.content += content
-		}
-		if stop {
-			break
-		}
+}
+
+func prepareMessage(messages []map[string]any, tools []map[string]any, toolChoice any) (string, []string) {
+	message := flattenMessages(messages)
+	toolNames := []string{}
+	if len(tools) > 0 {
+		message = injectToolPrompt(message, buildToolSystemPrompt(tools, toolChoice))
+		toolNames = extractToolNames(tools)
 	}
-	if err := <-errCh; err != nil {
-		feedback := account.Feedback{Kind: account.FeedbackServerError, Reason: err.Error()}
-		if upstream, ok := err.(*xai.UpstreamError); ok {
-			switch upstream.Status {
-			case http.StatusUnauthorized:
-				feedback.Kind = account.FeedbackUnauthorized
-			case http.StatusForbidden:
-				feedback.Kind = account.FeedbackForbidden
-			case http.StatusTooManyRequests:
-				feedback.Kind = account.FeedbackRateLimited
+	return message, toolNames
+}
+
+func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) (streamResult, error) {
+	message, toolNames := prepareMessage(messages, tools, toolChoice)
+	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
+	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	excluded := map[string]struct{}{}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lease, err := reserveLease(state, spec, excluded)
+		if err != nil {
+			return streamResult{}, err
+		}
+
+		lines, errCh := state.XAI.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
+		result := streamResult{}
+		adapter := xai.NewStreamAdapter(state.Config)
+		for line := range lines {
+			kind, data := xai.ClassifyLine(line)
+			if kind != "data" {
+				continue
+			}
+			stop := false
+			for _, event := range adapter.Feed(data) {
+				switch event.Kind {
+				case "thinking":
+					result.reasoning += event.Content
+				case "text":
+					result.content += event.Content
+				case "annotation":
+					if event.AnnotationData != nil {
+						result.annotations = append(result.annotations, event.AnnotationData)
+					}
+				case "soft_stop":
+					stop = true
+				}
+			}
+			if stop {
+				break
 			}
 		}
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-		return streamResult{}, err
-	}
-	if len(toolNames) > 0 {
-		result.toolCalls = parseToolCalls(result.content, toolNames)
-		if len(result.toolCalls) > 0 {
-			result.content = ""
+
+		if err := <-errCh; err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if shouldRetry(err, retryCodes, attempt, maxRetries) {
+				excluded[lease.Token] = struct{}{}
+				continue
+			}
+			return streamResult{}, err
 		}
+
+		if len(toolNames) > 0 {
+			result.toolCalls = parseToolCalls(result.content, toolNames)
+			if len(result.toolCalls) > 0 {
+				result.content = ""
+			}
+		}
+		result.searchSources = adapter.SearchSourcesList()
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		refreshQuotaAsync(state, lease.Token)
+		return result, nil
 	}
-	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-	return result, nil
+
+	return streamResult{}, fmt.Errorf("no available accounts for this model tier")
+}
+
+func writeSSEData(c *gin.Context, payload any) bool {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	if _, err := c.Writer.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+		return false
+	}
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return true
+}
+
+func writeSSEEvent(c *gin.Context, event string, payload any) bool {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	if _, err := c.Writer.Write([]byte("event: " + event + "\n" + "data: " + string(data) + "\n\n")); err != nil {
+		return false
+	}
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return true
+}
+
+func writeSSEDone(c *gin.Context) bool {
+	if _, err := c.Writer.Write([]byte("data: [DONE]\n\n")); err != nil {
+		return false
+	}
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return true
 }
 
 func classifyLine(line string) (string, string) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "event:") {
-		return "skip", ""
-	}
-	if strings.HasPrefix(line, "data:") {
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			return "done", ""
-		}
-		return "data", data
-	}
-	if strings.HasPrefix(line, "{") {
-		return "data", line
-	}
-	return "skip", ""
+	return xai.ClassifyLine(line)
 }
 
 func parseChatData(data string) (content, reasoning string, stop bool) {
@@ -354,6 +753,12 @@ func stringifyContent(content any) string {
 	switch typed := content.(type) {
 	case string:
 		return typed
+	case []map[string]any:
+		asAny := make([]any, 0, len(typed))
+		for _, item := range typed {
+			asAny = append(asAny, item)
+		}
+		return stringifyContent(asAny)
 	case []any:
 		parts := []string{}
 		for _, item := range typed {
@@ -430,80 +835,176 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	id := responseID("chatcmpl")
-	result, err := runChat(c.Request.Context(), state, spec, request.Messages, request.Tools, request.ToolChoice)
-	if err != nil {
-		writeOpenAIError(c, err)
-		return
-	}
-	c.Stream(func(w io.Writer) bool {
-		if len(result.toolCalls) > 0 {
-			for index, call := range result.toolCalls {
+	message, toolNames := prepareMessage(request.Messages, request.Tools, request.ToolChoice)
+	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
+	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	excluded := map[string]struct{}{}
+	promptTokens := tokens.EstimateAny(request.Messages)
+	thinkingEnabled := state.Config.GetBool("features.thinking", true)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lease, err := reserveLease(state, spec, excluded)
+		if err != nil {
+			writeOpenAIError(c, err)
+			return
+		}
+
+		lines, errCh := state.XAI.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
+		result := streamResult{}
+		adapter := xai.NewStreamAdapter(state.Config)
+		outputStarted := false
+
+		for line := range lines {
+			kind, data := xai.ClassifyLine(line)
+			if kind != "data" {
+				continue
+			}
+			stop := false
+			for _, event := range adapter.Feed(data) {
+				switch event.Kind {
+				case "thinking":
+					result.reasoning += event.Content
+					if len(toolNames) == 0 && thinkingEnabled {
+						outputStarted = true
+						if !writeSSEData(c, map[string]any{
+							"id":      id,
+							"object":  "chat.completion.chunk",
+							"created": time.Now().Unix(),
+							"model":   spec.Name,
+							"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": event.Content}}},
+						}) {
+							return
+						}
+					}
+				case "text":
+					result.content += event.Content
+					if len(toolNames) == 0 {
+						outputStarted = true
+						if !writeSSEData(c, map[string]any{
+							"id":      id,
+							"object":  "chat.completion.chunk",
+							"created": time.Now().Unix(),
+							"model":   spec.Name,
+							"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": event.Content}}},
+						}) {
+							return
+						}
+					}
+				case "annotation":
+					if event.AnnotationData != nil {
+						result.annotations = append(result.annotations, event.AnnotationData)
+					}
+				case "soft_stop":
+					stop = true
+				}
+			}
+			if stop {
+				break
+			}
+		}
+
+		if err := <-errCh; err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
+				excluded[lease.Token] = struct{}{}
+				continue
+			}
+			if !outputStarted {
+				writeOpenAIError(c, err)
+			}
+			return
+		}
+
+		if len(toolNames) > 0 {
+			result.toolCalls = parseToolCalls(result.content, toolNames)
+			if len(result.toolCalls) > 0 {
+				for index, call := range result.toolCalls {
+					if !writeSSEData(c, map[string]any{
+						"id":      id,
+						"object":  "chat.completion.chunk",
+						"created": time.Now().Unix(),
+						"model":   spec.Name,
+						"choices": []map[string]any{{
+							"index": 0,
+							"delta": map[string]any{
+								"role":    "assistant",
+								"content": nil,
+								"tool_calls": []map[string]any{{
+									"index": index,
+									"id":    call.CallID,
+									"type":  "function",
+									"function": map[string]any{
+										"name":      call.Name,
+										"arguments": call.Arguments,
+									},
+								}},
+							},
+						}},
+					}) {
+						return
+					}
+				}
+				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+				refreshQuotaAsync(state, lease.Token)
 				payload := map[string]any{
 					"id":      id,
 					"object":  "chat.completion.chunk",
 					"created": time.Now().Unix(),
 					"model":   spec.Name,
-					"choices": []map[string]any{{
-						"index": 0,
-						"delta": map[string]any{
-							"role":    "assistant",
-							"content": nil,
-							"tool_calls": []map[string]any{{
-								"index": index,
-								"id":    call.CallID,
-								"type":  "function",
-								"function": map[string]any{
-									"name":      call.Name,
-									"arguments": call.Arguments,
-								},
-							}},
-						},
-					}},
+					"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}},
 				}
-				data, _ := json.Marshal(payload)
-				_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
+				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
+					payload["search_sources"] = sources
+				}
+				_ = writeSSEData(c, payload)
+				_ = writeSSEDone(c)
+				return
 			}
-			done, _ := json.Marshal(map[string]any{
-				"id":      id,
-				"object":  "chat.completion.chunk",
-				"created": time.Now().Unix(),
-				"model":   spec.Name,
-				"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}},
-			})
-			_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
-			_, _ = w.Write([]byte("data: [DONE]\n\n"))
-			return false
+			if thinkingEnabled && result.reasoning != "" {
+				if !writeSSEData(c, map[string]any{
+					"id":      id,
+					"object":  "chat.completion.chunk",
+					"created": time.Now().Unix(),
+					"model":   spec.Name,
+					"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": result.reasoning}}},
+				}) {
+					return
+				}
+			}
+			if result.content != "" {
+				if !writeSSEData(c, map[string]any{
+					"id":      id,
+					"object":  "chat.completion.chunk",
+					"created": time.Now().Unix(),
+					"model":   spec.Name,
+					"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": result.content}}},
+				}) {
+					return
+				}
+			}
 		}
-		if result.reasoning != "" && state.Config.GetBool("features.thinking", true) {
-			data, _ := json.Marshal(map[string]any{
-				"id":      id,
-				"object":  "chat.completion.chunk",
-				"created": time.Now().Unix(),
-				"model":   spec.Name,
-				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": result.reasoning}}},
-			})
-			_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
-		}
-		data, _ := json.Marshal(map[string]any{
-			"id":      id,
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"model":   spec.Name,
-			"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": result.content}}},
-		})
-		_, _ = w.Write([]byte("data: " + string(data) + "\n\n"))
-		done, _ := json.Marshal(map[string]any{
+		result.searchSources = adapter.SearchSourcesList()
+
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		refreshQuotaAsync(state, lease.Token)
+		finalChunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",
 			"created": time.Now().Unix(),
 			"model":   spec.Name,
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
-			"usage":   buildUsage(tokens.EstimateAny(request.Messages), tokens.EstimateText(result.content)+tokens.EstimateText(result.reasoning), tokens.EstimateText(result.reasoning)),
-		})
-		_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
-		return false
-	})
+			"usage":   buildUsage(promptTokens, tokens.EstimateText(result.content)+tokens.EstimateText(result.reasoning), tokens.EstimateText(result.reasoning)),
+		}
+		if len(result.annotations) > 0 {
+			finalChunk["annotations"] = result.annotations
+		}
+		if len(result.searchSources) > 0 {
+			finalChunk["search_sources"] = result.searchSources
+		}
+		_ = writeSSEData(c, finalChunk)
+		_ = writeSSEDone(c)
+		return
+	}
 }
 
 func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) {
@@ -511,42 +1012,189 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	id := responseID("resp")
-	result, err := runChat(c.Request.Context(), state, spec, messages, tools, toolChoice)
-	if err != nil {
-		writeOpenAIError(c, err)
+	message, toolNames := prepareMessage(messages, tools, toolChoice)
+	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
+	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	excluded := map[string]struct{}{}
+	promptTokens := tokens.EstimateAny(messages)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lease, err := reserveLease(state, spec, excluded)
+		if err != nil {
+			writeOpenAIError(c, err)
+			return
+		}
+
+		lines, errCh := state.XAI.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
+		result := streamResult{}
+		adapter := xai.NewStreamAdapter(state.Config)
+		itemID := responseID("msg")
+		createdSent := false
+
+		sendCreated := func() bool {
+			if createdSent {
+				return true
+			}
+			createdSent = true
+			return writeSSEEvent(c, "response.created", map[string]any{
+				"type":     "response.created",
+				"response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil),
+			}) && writeSSEEvent(c, "response.output_item.added", map[string]any{
+				"type":         "response.output_item.added",
+				"output_index": 0,
+				"item": map[string]any{
+					"id":      itemID,
+					"type":    "message",
+					"role":    "assistant",
+					"content": []map[string]any{{"type": "output_text", "text": ""}},
+				},
+			})
+		}
+
+		for line := range lines {
+			kind, data := xai.ClassifyLine(line)
+			if kind != "data" {
+				continue
+			}
+			stop := false
+			for _, event := range adapter.Feed(data) {
+				switch event.Kind {
+				case "thinking":
+					result.reasoning += event.Content
+				case "text":
+					result.content += event.Content
+					if len(toolNames) == 0 {
+						if !sendCreated() {
+							return
+						}
+						if !writeSSEEvent(c, "response.output_text.delta", map[string]any{
+							"type":          "response.output_text.delta",
+							"item_id":       itemID,
+							"output_index":  0,
+							"content_index": 0,
+							"delta":         event.Content,
+						}) {
+							return
+						}
+					}
+				case "annotation":
+					if event.AnnotationData != nil {
+						result.annotations = append(result.annotations, event.AnnotationData)
+					}
+				case "soft_stop":
+					stop = true
+				}
+			}
+			if stop {
+				break
+			}
+		}
+
+		if err := <-errCh; err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if !createdSent && shouldRetry(err, retryCodes, attempt, maxRetries) {
+				excluded[lease.Token] = struct{}{}
+				continue
+			}
+			if !createdSent {
+				writeOpenAIError(c, err)
+			}
+			return
+		}
+		result.searchSources = adapter.SearchSourcesList()
+
+		if len(toolNames) > 0 {
+			result.toolCalls = parseToolCalls(result.content, toolNames)
+			if !writeSSEEvent(c, "response.created", map[string]any{
+				"type":     "response.created",
+				"response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil),
+			}) {
+				return
+			}
+			if len(result.toolCalls) > 0 {
+				output := []map[string]any{}
+				for index, call := range result.toolCalls {
+					fcItemID := responseID("fc")
+					item := map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "status": "completed"}
+					output = append(output, item)
+					if !writeSSEEvent(c, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": index, "item": map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": "", "status": "in_progress"}}) {
+						return
+					}
+					if !writeSSEEvent(c, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": fcItemID, "output_index": index, "delta": call.Arguments}) {
+						return
+					}
+					if !writeSSEEvent(c, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "item_id": fcItemID, "output_index": index, "arguments": call.Arguments}) {
+						return
+					}
+					if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": index, "item": item}) {
+						return
+					}
+				}
+				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+				refreshQuotaAsync(state, lease.Token)
+				response := responsesObject(id, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0))
+				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
+					response["search_sources"] = sources
+				}
+				_ = writeSSEEvent(c, "response.completed", map[string]any{"type": "response.completed", "response": response})
+				_ = writeSSEDone(c)
+				return
+			}
+		}
+
+		if !createdSent {
+			if !sendCreated() {
+				return
+			}
+		}
+		contentItem := map[string]any{"type": "output_text", "text": result.content}
+		if len(result.annotations) > 0 {
+			contentItem["annotations"] = result.annotations
+		}
+		messageItem := map[string]any{"id": itemID, "type": "message", "role": "assistant", "content": []map[string]any{contentItem}}
+		if !writeSSEEvent(c, "response.output_text.done", map[string]any{
+			"type":          "response.output_text.done",
+			"item_id":       itemID,
+			"output_index":  0,
+			"content_index": 0,
+			"text":          result.content,
+		}) {
+			return
+		}
+		if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem}) {
+			return
+		}
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		refreshQuotaAsync(state, lease.Token)
+		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning)))
+		if len(result.searchSources) > 0 {
+			response["search_sources"] = result.searchSources
+		}
+		_ = writeSSEEvent(c, "response.completed", map[string]any{"type": "response.completed", "response": response})
+		_ = writeSSEDone(c)
 		return
 	}
-	c.Stream(func(w io.Writer) bool {
-		created, _ := json.Marshal(map[string]any{"type": "response.created", "response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil)})
-		_, _ = w.Write([]byte("event: response.created\ndata: " + string(created) + "\n\n"))
-		promptTokens := tokens.EstimateAny(messages)
-		if len(result.toolCalls) > 0 {
-			output := []map[string]any{}
-			for index, call := range result.toolCalls {
-				itemID := responseID("fc")
-				output = append(output, map[string]any{"id": itemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "status": "completed"})
-				added, _ := json.Marshal(map[string]any{"type": "response.output_item.added", "output_index": index, "item": map[string]any{"id": itemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": "", "status": "in_progress"}})
-				delta, _ := json.Marshal(map[string]any{"type": "response.function_call_arguments.delta", "item_id": itemID, "output_index": index, "delta": call.Arguments})
-				doneArgs, _ := json.Marshal(map[string]any{"type": "response.function_call_arguments.done", "item_id": itemID, "output_index": index, "arguments": call.Arguments})
-				doneItem, _ := json.Marshal(map[string]any{"type": "response.output_item.done", "output_index": index, "item": output[len(output)-1]})
-				_, _ = w.Write([]byte("event: response.output_item.added\ndata: " + string(added) + "\n\n"))
-				_, _ = w.Write([]byte("event: response.function_call_arguments.delta\ndata: " + string(delta) + "\n\n"))
-				_, _ = w.Write([]byte("event: response.function_call_arguments.done\ndata: " + string(doneArgs) + "\n\n"))
-				_, _ = w.Write([]byte("event: response.output_item.done\ndata: " + string(doneItem) + "\n\n"))
-			}
-			completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": responsesObject(id, spec.Name, "completed", output, responsesUsage(promptTokens, maxInt(len(output)*12, 8), 0))})
-			_, _ = w.Write([]byte("event: response.completed\ndata: " + string(completed) + "\n\n"))
-			_, _ = w.Write([]byte("data: [DONE]\n\n"))
-			return false
-		}
-		messageItem := map[string]any{"id": responseID("msg"), "type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": result.content}}}
-		added, _ := json.Marshal(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": messageItem})
-		doneItem, _ := json.Marshal(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem})
-		completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsage(promptTokens, tokens.EstimateText(result.content), tokens.EstimateText(result.reasoning)))})
-		_, _ = w.Write([]byte("event: response.output_item.added\ndata: " + string(added) + "\n\n"))
-		_, _ = w.Write([]byte("event: response.output_item.done\ndata: " + string(doneItem) + "\n\n"))
-		_, _ = w.Write([]byte("event: response.completed\ndata: " + string(completed) + "\n\n"))
-		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+}
+
+func isInvalidCredentialsBody(body string) bool {
+	text := strings.ToLower(strings.TrimSpace(body))
+	return strings.Contains(text, "invalid-credentials") ||
+		strings.Contains(text, "bad-credentials") ||
+		strings.Contains(text, "failed to look up session id") ||
+		strings.Contains(text, "blocked-user") ||
+		strings.Contains(text, "email-domain-rejected") ||
+		strings.Contains(text, "session not found") ||
+		strings.Contains(text, "account suspended") ||
+		strings.Contains(text, "token revoked") ||
+		strings.Contains(text, "token expired")
+}
+
+func isInvalidCredentialsError(err *xai.UpstreamError) bool {
+	if err == nil {
 		return false
-	})
+	}
+	if err.Status != http.StatusBadRequest && err.Status != http.StatusUnauthorized && err.Status != http.StatusForbidden {
+		return false
+	}
+	return isInvalidCredentialsBody(err.Body)
 }

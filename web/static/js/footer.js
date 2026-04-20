@@ -29,7 +29,7 @@ window.renderSiteFooter = async function renderSiteFooter() {
     return node;
   };
 
-  const brand = link('Grok2API', 'https://github.com/chenyme/grok2api');
+const brand = link('Grok2API', 'https://github.com/ddmww/grok2api-go');
   footer.appendChild(brand);
 
   footer.appendChild(sep());
@@ -40,7 +40,7 @@ window.renderSiteFooter = async function renderSiteFooter() {
   if (version) {
     footer.appendChild(sep());
 
-    const ver = link(`v${version}`, 'https://github.com/chenyme/grok2api/releases');
+const ver = link(`v${version}`, 'https://github.com/ddmww/grok2api-go/releases');
     ver.className = 'site-footer-version';
     footer.appendChild(ver);
   }

@@ -19,6 +19,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
 	"github.com/ddmww/grok2api-go/internal/products/admin"
+	"github.com/ddmww/grok2api-go/internal/products/anthropic"
 	"github.com/ddmww/grok2api-go/internal/products/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -78,6 +79,7 @@ func main() {
 	router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 	admin.Mount(router, state)
 	openai.Mount(router, state)
+	anthropic.Mount(router, state)
 
 	host := os.Getenv("SERVER_HOST")
 	if host == "" {

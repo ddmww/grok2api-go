@@ -66,7 +66,21 @@ func sanitizeHeaderValue(value string, stripSpaces bool) string {
 
 func buildSSOCookie(cfg *config.Service, token string) string {
 	cookie := fmt.Sprintf("sso=%s; sso-rw=%s", sanitizeToken(token), sanitizeToken(token))
-	cfCookies := sanitizeHeaderValue(cfg.GetString("proxy.clearance.cf_cookies", ""), false)
+	cfCookies := ""
+	cfClearance := ""
+	if cfg != nil {
+		cfCookies = sanitizeHeaderValue(cfg.GetString("proxy.clearance.cf_cookies", ""), false)
+		cfClearance = sanitizeHeaderValue(cfg.GetString("proxy.clearance.cf_clearance", cfg.GetString("proxy.cf_clearance", "")), true)
+	}
+	if cfClearance != "" {
+		if cfCookies == "" {
+			cfCookies = "cf_clearance=" + cfClearance
+		} else if strings.Contains(cfCookies, "cf_clearance=") {
+			cfCookies = regexp.MustCompile(`(^|;\s*)cf_clearance=[^;]*`).ReplaceAllString(cfCookies, "${1}cf_clearance="+cfClearance)
+		} else {
+			cfCookies = strings.TrimRight(cfCookies, "; ") + "; cf_clearance=" + cfClearance
+		}
+	}
 	if cfCookies != "" {
 		cookie += "; " + cfCookies
 	}
@@ -105,6 +119,29 @@ func buildRequestHeaders(cfg *config.Service, token, contentType, origin, refere
 	headers.Set("Cookie", buildSSOCookie(cfg, token))
 	headers.Set("x-statsig-id", statsigID(cfg))
 	headers.Set("x-xai-request-id", uuid.NewString())
+
+	for key, value := range clientHints(browser, rawUserAgent) {
+		headers.Set(key, value)
+	}
+
+	return headers
+}
+
+func buildWSHeaders(cfg *config.Service, token, origin string) http.Header {
+	if origin == "" {
+		origin = "https://grok.com"
+	}
+	rawUserAgent := cfg.GetString("proxy.clearance.user_agent", defaultUserAgent)
+	userAgent := sanitizeHeaderValue(rawUserAgent, false)
+	browser := resolveBrowser(cfg, rawUserAgent)
+
+	headers := http.Header{}
+	headers.Set("Origin", sanitizeHeaderValue(origin, false))
+	headers.Set("User-Agent", userAgent)
+	headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	headers.Set("Cache-Control", "no-cache")
+	headers.Set("Pragma", "no-cache")
+	headers.Set("Cookie", buildSSOCookie(cfg, token))
 
 	for key, value := range clientHints(browser, rawUserAgent) {
 		headers.Set(key, value)

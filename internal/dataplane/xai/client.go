@@ -3,6 +3,8 @@ package xai
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +17,8 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/account"
 	"github.com/ddmww/grok2api-go/internal/control/proxy"
 	"github.com/ddmww/grok2api-go/internal/platform/config"
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -29,6 +33,28 @@ type Client struct {
 type UpstreamError struct {
 	Status int
 	Body   string
+}
+
+type readCloserChain struct {
+	io.Reader
+	closers []io.Closer
+}
+
+type closerFunc func() error
+
+func (fn closerFunc) Close() error { return fn() }
+
+func (r *readCloserChain) Close() error {
+	var firstErr error
+	for _, closer := range r.closers {
+		if closer == nil {
+			continue
+		}
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (e *UpstreamError) Error() string {
@@ -78,7 +104,67 @@ func (c *Client) do(ctx context.Context, method, urlValue, token string, body []
 	if isResettableStatus(c.cfg, response.StatusCode) {
 		c.proxy.Reset(proxyKey)
 	}
+	if err := decodeResponseBody(response); err != nil {
+		response.Body.Close()
+		return nil, err
+	}
 	return response, nil
+}
+
+func decodeResponseBody(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	if encoding == "" {
+		return nil
+	}
+
+	parts := strings.Split(encoding, ",")
+	reader := io.Reader(resp.Body)
+	closers := []io.Closer{resp.Body}
+
+	for index := len(parts) - 1; index >= 0; index-- {
+		part := strings.ToLower(strings.TrimSpace(parts[index]))
+		switch part {
+		case "", "identity":
+			continue
+		case "gzip":
+			gzipReader, err := gzip.NewReader(reader)
+			if err != nil {
+				return err
+			}
+			reader = gzipReader
+			closers = append([]io.Closer{gzipReader}, closers...)
+		case "deflate":
+			zlibReader, err := zlib.NewReader(reader)
+			if err != nil {
+				return err
+			}
+			reader = zlibReader
+			closers = append([]io.Closer{zlibReader}, closers...)
+		case "br":
+			reader = brotli.NewReader(reader)
+		case "zstd":
+			zstdReader, err := zstd.NewReader(reader)
+			if err != nil {
+				return err
+			}
+			reader = zstdReader
+			closers = append([]io.Closer{closerFunc(func() error {
+				zstdReader.Close()
+				return nil
+			})}, closers...)
+		default:
+			return fmt.Errorf("unsupported content-encoding: %s", part)
+		}
+	}
+
+	resp.Body = &readCloserChain{Reader: reader, closers: closers}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	return nil
 }
 
 func (c *Client) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {
@@ -219,6 +305,10 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 	if isResettableStatus(c.cfg, resp.StatusCode) {
 		c.proxy.Reset(proxyKey)
 	}
+	if err := decodeResponseBody(resp); err != nil {
+		resp.Body.Close()
+		return err
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -243,6 +333,10 @@ func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any
 	}
 	if isResettableStatus(c.cfg, resp.StatusCode) {
 		c.proxy.Reset(proxyKey)
+	}
+	if err := decodeResponseBody(resp); err != nil {
+		resp.Body.Close()
+		return nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -282,6 +376,10 @@ func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
 	}
 	if isResettableStatus(c.cfg, resp.StatusCode) {
 		c.proxy.Reset(proxyKey)
+	}
+	if err := decodeResponseBody(resp); err != nil {
+		resp.Body.Close()
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {

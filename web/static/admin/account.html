@@ -126,6 +126,153 @@
       margin-top:auto;
     }
     .stat-muted { color:#a1a1aa !important; }
+    .model-panel {
+      padding:18px 20px;
+      border-radius:16px;
+      background:#fff;
+      display:flex;
+      flex-direction:column;
+      gap:16px;
+      margin-bottom:8px;
+    }
+    .model-panel-head {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      flex-wrap:wrap;
+    }
+    .model-panel-copy {
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .model-panel-title {
+      font-size:14px;
+      font-weight:600;
+      color:#171717;
+    }
+    .model-panel-sub {
+      font-size:12px;
+      color:#8a8a8a;
+      line-height:1.5;
+    }
+    .model-pool-list {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .model-pool-chip {
+      min-height:28px;
+      padding:0 10px;
+      border-radius:999px;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      background:#f7f2ea;
+      color:#6c6255;
+      font-size:12px;
+      font-weight:600;
+    }
+    .model-pool-chip-count {
+      min-width:18px;
+      height:18px;
+      padding:0 5px;
+      border-radius:999px;
+      background:rgba(17,17,17,.06);
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      font-size:11px;
+      font-variant-numeric:tabular-nums;
+    }
+    .model-grid {
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:14px;
+    }
+    .model-group {
+      padding:16px;
+      border-radius:14px;
+      background:#faf8f2;
+      border:1px solid #efe6d9;
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      min-height:132px;
+    }
+    .model-group-head {
+      display:flex;
+      align-items:baseline;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .model-group-title {
+      font-size:13px;
+      font-weight:600;
+      color:#171717;
+    }
+    .model-group-count {
+      font-size:11px;
+      color:#8a8a8a;
+      font-variant-numeric:tabular-nums;
+    }
+    .model-chip-list {
+      display:flex;
+      align-items:flex-start;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .model-chip {
+      display:inline-flex;
+      flex-direction:column;
+      gap:4px;
+      min-width:160px;
+      max-width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      background:#fff;
+      border:1px solid #ece3d6;
+      cursor:pointer;
+    }
+    .model-chip:hover { border-color:#d7c9b6; background:#fffdfa; }
+    .model-chip:focus-visible {
+      outline:2px solid rgba(17,17,17,.18);
+      outline-offset:2px;
+    }
+    .model-chip-name {
+      font-size:12px;
+      font-weight:600;
+      color:#171717;
+      line-height:1.35;
+      word-break:break-word;
+    }
+    .model-chip-meta {
+      display:flex;
+      align-items:center;
+      gap:6px;
+      flex-wrap:wrap;
+    }
+    .model-chip-badge {
+      min-height:20px;
+      padding:0 7px;
+      border-radius:999px;
+      background:#f5efe6;
+      color:#75695a;
+      font-size:10px;
+      font-weight:600;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      text-transform:uppercase;
+      letter-spacing:.03em;
+    }
+    .model-empty {
+      padding:10px 0;
+      color:#999;
+      font-size:12px;
+    }
 
     /* Filters */
     .filter-bar {
@@ -819,6 +966,23 @@
     </div>
   </div>
 
+  <div class="section-head">
+    <div class="section-title-row">
+      <div class="section-title" data-i18n="account.sectionModels">可用模型</div>
+      <span class="section-count-badge" id="section-model-count">0</span>
+    </div>
+  </div>
+  <section class="model-panel">
+    <div class="model-panel-head">
+      <div class="model-panel-copy">
+        <div class="model-panel-title" data-i18n="account.modelPanelTitle">按当前账号池可调用范围显示</div>
+        <div class="model-panel-sub" id="model-panel-subtitle">仅展示当前已导入且未禁用账号可以实际调用的模型。</div>
+      </div>
+      <div class="model-pool-list" id="model-pool-list"></div>
+    </div>
+    <div class="model-grid" id="model-grid"></div>
+  </section>
+
   <div class="section-head" style="margin-top:40px">
     <div class="section-title-row">
       <div class="section-title" data-i18n="account.sectionTable">账户明细</div>
@@ -897,6 +1061,9 @@
       </div>
       <button type="button" onclick="doExport()" id="btn-export" class="toolbar-icon-btn">
         <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      </button>
+      <button type="button" onclick="toggleSelectAllResults()" id="btn-select-all-results" class="toolbar-icon-btn">
+        <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M9 11l2 2 4-4"/><path d="M20 12c0 4.418-3.582 8-8 8s-8-3.582-8-8 3.582-8 8-8c1.39 0 2.698.355 3.837.979"/><path d="M17 5h4v4"/></svg>
       </button>
       <button type="button" onclick="batchNSFW()" id="btn-nsfw" class="row-nsfw-btn" style="display:none">
         <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -1057,7 +1224,15 @@ const PAGE_SIZE_KEY = 'admin.account.page_size';
 const PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000, 2000];
 
 let allTokens = [], curStatus = 'all', curNsfw = 'all', curPool = 'all', curPage = 1, pageSize = loadSavedPageSize();
+let availableModels = { chat: [], image: [], image_edit: [], video: [] };
+let activeModelPools = [];
+let activeModelPoolCounts = {};
+let summaryState = emptySummary();
+let tableTotal = 0;
+let tableTotalPages = 1;
+let tableRevision = 0;
 const sel = new Set();
+let selectAllFiltered = false;
 const refreshingTokens = new Set();
 let _cb = null;
 let _editingToken = '';
@@ -1076,6 +1251,7 @@ function applyAccountI18n() {
   const toolbarTips = [
     ['btn-filter', 'account.filter', '筛选'],
     ['btn-export', 'account.export', '导出数据'],
+    ['btn-select-all-results', 'account.selectAllResults', '全选全部'],
     ['btn-nsfw', 'account.batchNsfw', '开启 NSFW'],
     ['btn-refresh', 'account.batchRefresh', '刷新选中'],
     ['btn-delete', 'account.batchDelete', '删除选中'],
@@ -1127,17 +1303,13 @@ async function _api(method, path, body) {
 // ── Load ───────────────────────────────────────────────────────────────────
 async function load() {
   try {
-    const data = await _api('GET', '/tokens');
-    allTokens = Array.isArray(data.tokens)
-      ? data.tokens
-      : Object.entries(data.tokens || {}).flatMap(([pool, items]) =>
-          Array.isArray(items) ? items.map(t => ({ ...t, pool: t.pool || pool })) : []);
+    await loadAccountView({ includeSummary: true, includeModels: true });
     render();
   } catch (e) { showToast(`${tr('account.loadFailed', null, '加载失败')}: ${e.message}`, 'error'); }
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
-function render() { renderStats(); renderFilters(); renderTable(); }
+function render() { renderStats(); renderModels(); renderFilters(); renderTable(); }
 
 function poolLabel(pool) {
   return tr(`account.pool.${pool}`, null, pool);
@@ -1152,26 +1324,69 @@ function isInvalidStatus(status) {
 }
 
 function renderStats() {
-  const active  = allTokens.filter(t => t.status === 'active').length;
-  const cooling = allTokens.filter(t => t.status === 'cooling').length;
-  const invalid = allTokens.filter(t => isInvalidStatus(t.status)).length;
-  const disabled = allTokens.filter(t => isDisabledStatus(t.status)).length;
-  let calls = 0, qa = 0, qf = 0, qe = 0, qh = 0;
-  for (const t of allTokens) {
-    const q = t.quota || {};
-    calls += (t.use_count || 0) + (t.fail_count || 0);
-    qa += q.auto?.remaining   || 0;
-    qf += q.fast?.remaining   || 0;
-    qe += q.expert?.remaining || 0;
-    qh += q.heavy?.remaining  || 0;
+  $('s-total',   summaryState.total || 0);
+  $('s-active',  summaryState.status?.active || 0);
+  $('s-cooling', summaryState.status?.cooling || 0);
+  $('s-invalid', summaryState.status?.invalid || 0);
+  $('s-disabled', summaryState.status?.disabled || 0);
+  $('s-calls', fmt(summaryState.calls || 0));
+  $('s-qa', fmt(summaryState.quota?.auto || 0));
+  $('s-qf', fmt(summaryState.quota?.fast || 0));
+  $('s-qe', fmt(summaryState.quota?.expert || 0));
+  $('s-qh', fmt(summaryState.quota?.heavy || 0));
+}
+
+function renderModels() {
+  const grid = document.getElementById('model-grid');
+  const pools = document.getElementById('model-pool-list');
+  const subtitle = document.getElementById('model-panel-subtitle');
+  const totalEl = document.getElementById('section-model-count');
+  if (!grid || !pools || !subtitle || !totalEl) return;
+
+  const groups = [
+    { key: 'chat', title: tr('account.modelGroupChat', null, '对话模型') },
+    { key: 'image', title: tr('account.modelGroupImage', null, '生图模型') },
+    { key: 'image_edit', title: tr('account.modelGroupImageEdit', null, '修图模型') },
+    { key: 'video', title: tr('account.modelGroupVideo', null, '视频模型') },
+  ];
+  const total = groups.reduce((sum, group) => sum + ((availableModels[group.key] || []).length), 0);
+  totalEl.textContent = total;
+
+  if (!activeModelPools.length) {
+    pools.innerHTML = `<span class="model-empty">${tr('account.modelEmptyPools', null, '当前没有可管理账号，暂时无法判断可用模型。')}</span>`;
+    subtitle.textContent = tr('account.modelPanelEmpty', null, '导入并启用账号后，这里会自动按池子显示可用模型。');
+  } else {
+    pools.innerHTML = activeModelPools.map(pool => `
+      <span class="model-pool-chip">
+        <span>${xe(poolLabel(pool))}</span>
+        <span class="model-pool-chip-count">${activeModelPoolCounts?.[pool] ?? 0}</span>
+      </span>
+    `).join('');
+    subtitle.textContent = tr('account.modelPanelHint', null, '模型列表会跟随当前可用账号池自动变化，basic 只显示 basic 可调用模型。');
   }
-  $('s-total',   allTokens.length);
-  $('s-active',  active);
-  $('s-cooling', cooling);
-  $('s-invalid', invalid);
-  $('s-disabled', disabled);
-  $('s-calls', fmt(calls));
-  $('s-qa', fmt(qa)); $('s-qf', fmt(qf)); $('s-qe', fmt(qe)); $('s-qh', fmt(qh));
+
+  grid.innerHTML = groups.map(group => {
+    const items = availableModels[group.key] || [];
+    return `
+      <section class="model-group">
+        <div class="model-group-head">
+          <div class="model-group-title">${xe(group.title)}</div>
+          <div class="model-group-count">${items.length}</div>
+        </div>
+        <div class="model-chip-list">
+          ${items.length ? items.map(item => `
+            <article class="model-chip" role="button" tabindex="0" onclick="copyModelId('${xe(item.id || '')}')" onkeydown="handleModelKeyCopy(event, '${xe(item.id || '')}')" aria-label="${xe(item.id || '')}">
+              <div class="model-chip-name">${xe(item.public_name || item.name || item.id)}</div>
+              <div class="model-chip-meta">
+                <span class="model-chip-badge">${xe(item.id || '')}</span>
+                <span class="model-chip-badge">${xe(poolLabel(item.pool || 'basic'))}</span>
+              </div>
+            </article>
+          `).join('') : `<div class="model-empty">${tr('account.modelGroupEmpty', null, '当前账号池下暂无此类模型')}</div>`}
+        </div>
+      </section>
+    `;
+  }).join('');
 }
 
 function renderFilters() {
@@ -1222,34 +1437,33 @@ function syncFilterTrigger() {
 }
 
 function renderStatusFilters() {
-  const scope = applyNsfwFilter(applyPoolFilter(allTokens, curPool), curNsfw);
-  setFilterCount('fc-status-all', scope.length);
-  setFilterCount('fc-status-active', scope.filter(t => t.status === 'active').length);
-  setFilterCount('fc-status-cooling', scope.filter(t => t.status === 'cooling').length);
-  setFilterCount('fc-status-invalid', scope.filter(t => isInvalidStatus(t.status)).length);
-  setFilterCount('fc-status-disabled', scope.filter(t => isDisabledStatus(t.status)).length);
+  const status = summaryState.status || {};
+  setFilterCount('fc-status-all', status.all || 0);
+  setFilterCount('fc-status-active', status.active || 0);
+  setFilterCount('fc-status-cooling', status.cooling || 0);
+  setFilterCount('fc-status-invalid', status.invalid || 0);
+  setFilterCount('fc-status-disabled', status.disabled || 0);
   document.querySelectorAll('[data-status]').forEach(el => el.classList.toggle('active', el.dataset.status === curStatus));
 }
 
 function renderNsfwFilters() {
-  const scope = applyStatusFilter(applyPoolFilter(allTokens, curPool), curStatus);
-  const enabled = scope.filter(t => (t.tags || []).includes('nsfw')).length;
-  setFilterCount('fc-nsfw-all', scope.length);
-  setFilterCount('fc-nsfw-enabled', enabled);
-  setFilterCount('fc-nsfw-disabled', scope.length - enabled);
+  const nsfw = summaryState.nsfw || {};
+  setFilterCount('fc-nsfw-all', nsfw.all || 0);
+  setFilterCount('fc-nsfw-enabled', nsfw.enabled || 0);
+  setFilterCount('fc-nsfw-disabled', nsfw.disabled || 0);
   document.querySelectorAll('[data-nsfw]').forEach(el => el.classList.toggle('active', el.dataset.nsfw === curNsfw));
 }
 
 function renderPoolFilters() {
   const wrap = document.getElementById('pool-filter-chips');
   if (!wrap) return;
-  const pools = [...new Set(['basic', 'super', 'heavy', ...allTokens.map(t => t.pool || 'basic')])];
+  const poolCounts = summaryState.pool || {};
+  const pools = ['basic', 'super', 'heavy'].filter(pool => (poolCounts[pool] || 0) > 0 || curPool === pool);
   if (curPool !== 'all' && !pools.includes(curPool)) curPool = 'all';
-  const scope = applyNsfwFilter(applyStatusFilter(allTokens, curStatus), curNsfw);
   wrap.innerHTML = [
-    `<button type="button" class="filter-chip${curPool === 'all' ? ' active' : ''}" data-pool="all" onclick="switchPool('all')"><span>${tr('account.filterTypeAll', null, '全部')}</span><span class="filter-chip-count">${scope.length}</span></button>`,
+    `<button type="button" class="filter-chip${curPool === 'all' ? ' active' : ''}" data-pool="all" onclick="switchPool('all')"><span>${tr('account.filterTypeAll', null, '全部')}</span><span class="filter-chip-count">${poolCounts.all || 0}</span></button>`,
     ...pools.map(pool => {
-      const count = scope.filter(t => (t.pool || 'basic') === pool).length;
+      const count = poolCounts[pool] || 0;
       return `<button type="button" class="filter-chip${curPool === pool ? ' active' : ''}" data-pool="${xe(pool)}" onclick="switchPool('${xe(pool)}')"><span>${xe(poolLabel(pool))}</span><span class="filter-chip-count">${count}</span></button>`;
     }),
   ].join('');
@@ -1260,28 +1474,6 @@ function setFilterCount(id, value) {
   if (el) el.textContent = value;
 }
 
-function applyPoolFilter(items, pool = curPool) {
-  if (pool === 'all') return items;
-  return items.filter(t => (t.pool || 'basic') === pool);
-}
-
-function applyStatusFilter(items, status = curStatus) {
-  if (status === 'all') return items;
-  if (status === 'invalid') return items.filter(t => isInvalidStatus(t.status));
-  if (status === 'disabled') return items.filter(t => isDisabledStatus(t.status));
-  return items.filter(t => t.status === status);
-}
-
-function applyNsfwFilter(items, mode = curNsfw) {
-  if (mode === 'all') return items;
-  if (mode === 'enabled') return items.filter(t => (t.tags || []).includes('nsfw'));
-  return items.filter(t => !(t.tags || []).includes('nsfw'));
-}
-
-function filtered() {
-  return applyNsfwFilter(applyStatusFilter(applyPoolFilter(allTokens, curPool), curStatus), curNsfw);
-}
-
 function preserveScroll(fn) {
   const y = window.scrollY;
   fn();
@@ -1289,19 +1481,25 @@ function preserveScroll(fn) {
 }
 
 function renderTable() {
-  const items = filtered(), total = items.length;
-  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const items = allTokens;
+  const total = tableTotal;
+  if (!total && selectAllFiltered) clearSelectionState();
+  const pages = Math.max(1, tableTotalPages || 1);
   if (curPage > pages) curPage = pages;
-  const slice = items.slice((curPage - 1) * pageSize, curPage * pageSize);
-
-  document.getElementById('tbody').innerHTML = slice.length
-    ? slice.map(rowHtml).join('')
+  document.getElementById('tbody').innerHTML = items.length
+    ? items.map(rowHtml).join('')
     : `<tr><td colspan="10" class="empty-state">${tr('account.empty', null, '暂无 Token，请点击右上角导入或添加。')}</td></tr>`;
 
   $('pagi-page', tr('account.pageIndicator', { current: total ? curPage : 0, total: pages }, `第 ${total ? curPage : 0} / ${pages} 页`));
   $('section-table-count', total);
   const prev = document.getElementById('btn-prev'), next = document.getElementById('btn-next');
   prev.disabled = curPage <= 1; next.disabled = curPage >= pages;
+  const cbAll = document.getElementById('cb-all');
+  if (cbAll) {
+    const selectedOnPage = selectAllFiltered ? items.length : items.filter(t => sel.has(t.token)).length;
+    cbAll.checked = items.length > 0 && selectedOnPage === items.length;
+    cbAll.indeterminate = !cbAll.checked && selectedOnPage > 0;
+  }
   updateBatchBtns();
 }
 
@@ -1327,7 +1525,7 @@ function rowHtml(t) {
         </svg>
       </button>`;
   return `<tr>
-    <td><input type="checkbox" class="cb row-cb" data-token="${xe(t.token)}" ${sel.has(t.token)?'checked':''} onchange="toggleRow(this)"></td>
+    <td><input type="checkbox" class="cb row-cb" data-token="${xe(t.token)}" ${(selectAllFiltered || sel.has(t.token))?'checked':''} onchange="toggleRow(this)"></td>
     <td><div class="token-stack">
         <span class="tok">${mask(t.token)}</span>
         <button onclick="copy('${xe(t.token)}')" class="row-icon-btn" data-tip="${xe(tr('account.actionCopy', null, '复制'))}" aria-label="${xe(tr('account.actionCopy', null, '复制'))}">
@@ -1376,56 +1574,99 @@ function switchStatus(status) {
   preserveScroll(() => {
     curStatus = status || 'all';
     curPage = 1;
-    sel.clear();
-    renderFilters();
-    renderTable();
+    clearSelectionState();
+    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
   });
 }
 function switchNsfw(mode) {
   preserveScroll(() => {
     curNsfw = mode || 'all';
     curPage = 1;
-    sel.clear();
-    renderFilters();
-    renderTable();
+    clearSelectionState();
+    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
   });
 }
 function switchPool(pool) {
   preserveScroll(() => {
     curPool = pool || 'all';
     curPage = 1;
-    sel.clear();
-    renderFilters();
-    renderTable();
+    clearSelectionState();
+    loadAccountView({ includeSummary: true, includeModels: false }).then(render).catch(handleLoadError);
   });
 }
-function prevPage() { if (curPage > 1) { curPage--; renderTable(); } }
-function nextPage() { const pages = Math.max(1, Math.ceil(filtered().length / pageSize)); if (curPage < pages) { curPage++; renderTable(); } }
+function prevPage() {
+  if (curPage > 1) {
+    curPage--;
+    loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
+  }
+}
+function nextPage() {
+  const pages = Math.max(1, tableTotalPages || 1);
+  if (curPage < pages) {
+    curPage++;
+    loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
+  }
+}
 function changePageSize(v) {
   const next = Number(v);
   pageSize = PAGE_SIZE_OPTIONS.includes(next) ? next : 50;
   localStorage.setItem(PAGE_SIZE_KEY, String(pageSize));
   curPage = 1;
-  renderTable();
+  loadAccountView({ includeSummary: false, includeModels: false }).then(render).catch(handleLoadError);
 }
 
 function toggleAll(checked) {
-  filtered().slice((curPage-1)*pageSize, curPage*pageSize).forEach(t => checked ? sel.add(t.token) : sel.delete(t.token));
+  if (selectAllFiltered && !checked) {
+    clearSelectionState();
+  } else {
+    allTokens.forEach(t => checked ? sel.add(t.token) : sel.delete(t.token));
+  }
   document.querySelectorAll('.row-cb').forEach(el => el.checked = checked);
   updateBatchBtns();
 }
 function toggleRow(el) {
+  if (selectAllFiltered) {
+    const currentPageTokens = allTokens.map(t => t.token);
+    selectAllFiltered = false;
+    sel.clear();
+    currentPageTokens.forEach(token => sel.add(token));
+  }
   el.checked ? sel.add(el.dataset.token) : sel.delete(el.dataset.token);
-  const page = filtered().slice((curPage-1)*pageSize, curPage*pageSize);
+  const page = allTokens;
   const cbAll = document.getElementById('cb-all');
-  cbAll.checked = page.every(t => sel.has(t.token));
-  cbAll.indeterminate = !cbAll.checked && sel.size > 0;
+  cbAll.checked = page.length > 0 && page.every(t => sel.has(t.token));
+  cbAll.indeterminate = !cbAll.checked && page.some(t => sel.has(t.token));
   updateBatchBtns();
 }
 function updateBatchBtns() {
-  const show = sel.size > 0;
+  const show = selectedCount() > 0;
   ['btn-nsfw','btn-refresh','btn-delete'].forEach(id =>
     document.getElementById(id).style.display = show ? '' : 'none');
+  const selectAllBtn = document.getElementById('btn-select-all-results');
+  if (selectAllBtn) selectAllBtn.classList.toggle('is-active', selectAllFiltered);
+}
+function clearSelectionState() {
+  selectAllFiltered = false;
+  sel.clear();
+}
+function selectedCount() {
+  return selectAllFiltered ? tableTotal : sel.size;
+}
+async function resolveSelectedTokens() {
+  if (selectAllFiltered) {
+    const tokens = await fetchAllFilteredTokens();
+    return tokens.map(item => item.token).filter(Boolean);
+  }
+  return [...sel];
+}
+function toggleSelectAllResults() {
+  if (selectAllFiltered) {
+    clearSelectionState();
+  } else if (tableTotal > 0) {
+    selectAllFiltered = true;
+    sel.clear();
+  }
+  renderTable();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1460,26 +1701,125 @@ function statusBadge(s) {
   const [cls, label] = m[s] || ['badge-invalid', s || tr('account.unknown', null, '未知')];
   return `<span class="badge ${cls}">${label}</span>`;
 }
+function emptySummary() {
+  return {
+    total: 0,
+    status: { all: 0, active: 0, cooling: 0, invalid: 0, disabled: 0 },
+    pool: { all: 0, basic: 0, super: 0, heavy: 0 },
+    nsfw: { all: 0, enabled: 0, disabled: 0 },
+    quota: { auto: 0, fast: 0, expert: 0, heavy: 0 },
+    calls: 0,
+  };
+}
+function currentQueryParams(overrides = {}) {
+  const params = new URLSearchParams();
+  const nextPage = overrides.page ?? curPage;
+  const nextPageSize = overrides.pageSize ?? pageSize;
+  params.set('page', String(nextPage));
+  params.set('page_size', String(nextPageSize));
+  if ((overrides.pool ?? curPool) !== 'all') params.set('pool', overrides.pool ?? curPool);
+  if ((overrides.status ?? curStatus) !== 'all') params.set('status', overrides.status ?? curStatus);
+  if ((overrides.nsfw ?? curNsfw) !== 'all') params.set('nsfw', overrides.nsfw ?? curNsfw);
+  return params;
+}
+async function loadAccountView(options = {}) {
+  const includeSummary = options.includeSummary !== false;
+  const includeModels = options.includeModels === true;
+  const query = currentQueryParams().toString();
+  const tasks = [
+    _api('GET', `/tokens?${query}`),
+  ];
+  if (includeSummary) tasks.push(_api('GET', `/tokens/summary?${query}`));
+  if (includeModels) tasks.push(_api('GET', '/models'));
+  const results = await Promise.all(tasks);
+
+  const tokensData = results.shift();
+  allTokens = Array.isArray(tokensData.items)
+    ? tokensData.items
+    : (Array.isArray(tokensData.tokens) ? tokensData.tokens : []);
+  tableTotal = Number(tokensData.total || 0);
+  tableTotalPages = Number(tokensData.total_pages || 1) || 1;
+  tableRevision = Number(tokensData.revision || 0);
+
+  if (includeSummary) {
+    const summaryData = results.shift();
+    summaryState = summaryData.summary || emptySummary();
+  }
+  if (includeModels) {
+    const modelsData = results.shift();
+    availableModels = modelsData.groups || { chat: [], image: [], image_edit: [], video: [] };
+    activeModelPools = Array.isArray(modelsData.pools?.active) ? modelsData.pools.active : [];
+    activeModelPoolCounts = modelsData.pools?.counts || {};
+  }
+}
+function handleLoadError(e) {
+  showToast(`${tr('account.loadFailed', null, '加载失败')}: ${e.message}`, 'error');
+}
+async function copyText(text, successText) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.setAttribute('readonly', 'readonly');
+      input.style.position = 'fixed';
+      input.style.top = '-9999px';
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(input);
+      if (!ok) throw new Error('copy failed');
+    }
+    showToast(successText, 'success');
+    return true;
+  } catch {
+    showToast(tr('account.copyFailed', null, '复制失败'), 'error');
+    return false;
+  }
+}
 async function copy(t) {
-  try { await navigator.clipboard.writeText(t); showToast(tr('account.copied', null, '已复制'), 'success'); }
-  catch { showToast(tr('account.copyFailed', null, '复制失败'), 'error'); }
+  return copyText(t, tr('account.copied', null, '已复制'));
+}
+async function copyModelId(id) {
+  if (!id) return false;
+  return copyText(id, tr('account.modelCopied', { model: id }, `已复制模型名：${id}`));
+}
+function handleModelKeyCopy(event, id) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    copyModelId(id);
+  }
+}
+async function fetchAllFilteredTokens() {
+  const items = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const query = currentQueryParams({ page, pageSize: 1000 }).toString();
+    const data = await _api('GET', `/tokens?${query}`);
+    const chunk = Array.isArray(data.items) ? data.items : [];
+    items.push(...chunk);
+    totalPages = Number(data.total_pages || 1) || 1;
+    page++;
+  } while (page <= totalPages);
+  return items;
 }
 
 // ── Add / Import ───────────────────────────────────────────────────────────
 
 // For import modals: includes "auto（自动检测）" as the first / default option.
 function fillImportPoolOptions(id) {
-  const known = [...new Set(['basic', 'super', 'heavy', ...allTokens.map(t => t.pool || 'basic')])];
   const opts = [
     `<option value="auto">${xe(tr('account.pool.autoRecommended', null, '自动检测（推荐）'))}</option>`,
-    ...known.map(p => `<option value="${p}">${xe(poolLabel(p))}</option>`),
+    ...['basic', 'super', 'heavy'].map(p => `<option value="${p}">${xe(poolLabel(p))}</option>`),
   ];
   document.getElementById(id).innerHTML = opts.join('');
 }
 
 // For edit modal: shows real pool names only (no "auto").
 function fillPoolOptions(id) {
-  const pools = [...new Set(['basic', 'super', 'heavy', ...allTokens.map(t => t.pool || 'basic')])];
+  const pools = ['basic', 'super', 'heavy'];
   document.getElementById(id).innerHTML = pools.map(p => `<option value="${p}">${xe(poolLabel(p))}</option>`).join('');
 }
 
@@ -1604,19 +1944,28 @@ async function saveTokens(pool, newToks, modalId, pendingMessage, successPrefix,
 
 // ── Export ─────────────────────────────────────────────────────────────────
 function doExport() {
-  const tokens = filtered();
-  if (!tokens.length) return showToast(tr('account.exportEmpty', null, '当前没有可导出的 Token'), 'error');
+  if (!(tableTotal > 0)) return showToast(tr('account.exportEmpty', null, '当前没有可导出的 Token'), 'error');
   openModal('modal-export');
-  document.getElementById('exp-count').textContent = tokens.length;
-  document.getElementById('exp-json-btn').onclick = () => {
+  document.getElementById('exp-count').textContent = tableTotal;
+  document.getElementById('exp-json-btn').onclick = async () => {
     closeModal('modal-export');
-    const out = {};
-    tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,tags:t.tags||[]}));
-    _download(JSON.stringify(out,null,2), `tokens-${currentFilterSuffix()}.json`, 'application/json');
+    try {
+      const tokens = await fetchAllFilteredTokens();
+      const out = {};
+      tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,tags:t.tags||[]}));
+      _download(JSON.stringify(out,null,2), `tokens-${currentFilterSuffix()}.json`, 'application/json');
+    } catch (e) {
+      showToast(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
+    }
   };
-  document.getElementById('exp-txt-btn').onclick = () => {
+  document.getElementById('exp-txt-btn').onclick = async () => {
     closeModal('modal-export');
-    _download(tokens.map(t => t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
+    try {
+      const tokens = await fetchAllFilteredTokens();
+      _download(tokens.map(t => t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
+    } catch (e) {
+      showToast(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
+    }
   };
 }
 
@@ -1641,13 +1990,17 @@ function doDelete(tokens) {
       try {
         showToast(tr('account.deleting', { n }, `正在删除 ${n} 个账户…`), 'info');
         await _api('DELETE', '/tokens', tokens);
+        if (selectAllFiltered) clearSelectionState();
         tokens.forEach(t => sel.delete(t));
         showToast(tr('account.deleteDone', { n }, `已删除 ${n} 个`), 'success');
         load();
       } catch (e) { showToast(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error'); }
     });
 }
-function batchDeleteSel() { if (sel.size) doDelete([...sel]); }
+async function batchDeleteSel() {
+  const tokens = await resolveSelectedTokens();
+  if (tokens.length) doDelete(tokens);
+}
 
 // ── Batch SSE runner ───────────────────────────────────────────────────────
 let _batchTaskId = null;
@@ -1775,9 +2128,10 @@ function disableOne(token) { setDisabled(token, true); }
 function restoreOne(token) { setDisabled(token, false); }
 
 async function batchRefreshSel() {
-  if (!sel.size) return;
-  await _runBatch('/batch/refresh', [...sel],
-    tr('account.refreshing', { n: sel.size }, `正在刷新 ${sel.size} 个账户…`),
+  const tokens = await resolveSelectedTokens();
+  if (!tokens.length) return;
+  await _runBatch('/batch/refresh', tokens,
+    tr('account.refreshing', { n: tokens.length }, `正在刷新 ${tokens.length} 个账户…`),
     (ok, fail) => showToast(tr('account.refreshDone', { ok, fail }, `刷新完成：成功 ${ok}，失败 ${fail}`), 'success')
   );
 }
@@ -1797,9 +2151,9 @@ async function nsfwOne(token, enabled = true) {
   } catch (e) { showToast(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error'); }
 }
 
-function batchNSFW() {
-  if (!sel.size) return;
-  const tokens = [...sel];
+async function batchNSFW() {
+  const tokens = await resolveSelectedTokens();
+  if (!tokens.length) return;
   openConfirm(
     tr('account.nsfwConfirmTitle', null, '开启 NSFW'),
     tr('account.nsfwConfirmBody', { n: tokens.length }, `为选中的 <b>${tokens.length}</b> 个账户开启 NSFW？`),

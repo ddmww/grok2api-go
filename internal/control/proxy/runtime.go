@@ -72,6 +72,10 @@ func (r *Runtime) Client(resource bool) (*http.Client, string, error) {
 	return client, proxyURL, nil
 }
 
+func (r *Runtime) ProxyURL(resource bool) string {
+	return strings.TrimSpace(r.pick(resource))
+}
+
 func (r *Runtime) Reset(proxyURL string) {
 	key := strings.TrimSpace(proxyURL)
 	if key == "" {

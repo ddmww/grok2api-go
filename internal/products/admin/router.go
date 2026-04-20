@@ -9,31 +9,60 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ddmww/grok2api-go/internal/app"
 	"github.com/ddmww/grok2api-go/internal/control/account"
+	"github.com/ddmww/grok2api-go/internal/control/model"
+	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
+	platformbatch "github.com/ddmww/grok2api-go/internal/platform/batch"
+	"github.com/ddmww/grok2api-go/internal/platform/logging"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
+	"github.com/ddmww/grok2api-go/internal/platform/updatecheck"
+	"github.com/ddmww/grok2api-go/internal/platform/upstreamblocker"
 	"github.com/ddmww/grok2api-go/internal/platform/version"
 	"github.com/gin-gonic/gin"
 )
 
+type updateService interface {
+	GetLatestReleaseInfo(context.Context, bool) updatecheck.ReleaseInfo
+}
+
+var newUpdateService = func() updateService {
+	return updatecheck.NewService(version.Current, "ddmww", "grok2api-go")
+}
+
+var (
+	cfgCharReplacements = strings.NewReplacer(
+		"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2212", "-",
+		"\u2018", "'", "\u2019", "'", "\u201c", "\"", "\u201d", "\"",
+		"\u00a0", " ", "\u2007", " ", "\u202f", " ", "\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "",
+	)
+	whitespaceRE        = regexp.MustCompile(`\s+`)
+	startupOnlyPrefixes = []string{
+		"account.storage",
+		"account.local",
+		"account.redis",
+		"account.mysql",
+		"account.postgresql",
+	}
+)
+
 func Mount(router *gin.Engine, state *app.State) {
+	updater := newUpdateService()
 	router.StaticFS("/static", http.Dir(paths.StaticDir()))
 	router.StaticFile("/favicon.ico", filepath.Join(paths.StaticDir(), "favicon.ico"))
 
 	router.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/admin") })
 	router.GET("/meta", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Current}) })
 	router.GET("/meta/update", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"current_version": version.Current,
-			"latest_version":  version.Current,
-			"has_update":      false,
-			"release_notes":   "",
-		})
+		c.JSON(http.StatusOK, updater.GetLatestReleaseInfo(c.Request.Context(), c.Query("force") == "true"))
 	})
 
 	router.GET("/admin", func(c *gin.Context) { c.Redirect(http.StatusFound, "/admin/login") })
@@ -53,10 +82,19 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
+			patch = sanitizeAdminConfigPatch(patch)
+			if err := ensureRuntimePatchAllowed(patch); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
 			if err := state.Config.Update(c.Request.Context(), patch); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
+			logging.ReloadFileLogging(
+				state.Config.GetString("logging.file_level", ""),
+				state.Config.GetInt("logging.max_files", 7) > 0,
+			)
 			state.Proxy.ResetAll()
 			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "配置已更新"})
 		})
@@ -73,35 +111,54 @@ func Mount(router *gin.Engine, state *app.State) {
 		})
 
 		api.GET("/tokens", func(c *gin.Context) {
-			page, err := state.Repo.ListAccounts(c.Request.Context(), account.ListQuery{Page: 1, PageSize: 2000, IncludeDeleted: false, SortBy: "updated_at", SortDesc: true})
+			query := parseAccountListQuery(c)
+			page, err := state.Repo.ListAccounts(c.Request.Context(), query)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
-			tokens := make([]map[string]any, 0, len(page.Items))
+			items := make([]map[string]any, 0, len(page.Items))
 			for _, item := range page.Items {
-				tokens = append(tokens, serializeToken(item))
+				items = append(items, serializeToken(item))
 			}
-			c.JSON(http.StatusOK, gin.H{"tokens": tokens})
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "success",
+				"items":       items,
+				"tokens":      items,
+				"total":       page.Total,
+				"page":        page.Page,
+				"page_size":   page.PageSize,
+				"total_pages": page.TotalPages,
+				"revision":    page.Revision,
+			})
+		})
+		api.GET("/tokens/summary", func(c *gin.Context) {
+			query := parseAccountListQuery(c)
+			summary, err := state.Repo.SummarizeAccounts(c.Request.Context(), query)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "success", "summary": summary})
+		})
+		api.GET("/models", func(c *gin.Context) {
+			items, err := listAvailableModels(c.Request.Context(), state.Repo)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, items)
 		})
 
 		api.POST("/tokens", func(c *gin.Context) {
-			var payload map[string][]map[string]any
+			var payload map[string][]any
 			if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
 			total := 0
 			for pool, items := range payload {
-				upserts := make([]account.Upsert, 0, len(items))
-				for _, item := range items {
-					token, _ := item["token"].(string)
-					upserts = append(upserts, account.Upsert{
-						Token: token,
-						Pool:  pool,
-						Tags:  normalizeAnyStringSlice(item["tags"]),
-					})
-				}
+				upserts := parseTokenImportItems(items, pool)
 				if _, err := state.Repo.ReplacePool(c.Request.Context(), pool, upserts); err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 					return
@@ -122,18 +179,58 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
-			upserts := make([]account.Upsert, 0, len(payload.Tokens))
-			for _, token := range payload.Tokens {
-				upserts = append(upserts, account.Upsert{Token: token, Pool: payload.Pool, Tags: payload.Tags})
+			requestedPool := strings.ToLower(strings.TrimSpace(payload.Pool))
+			syncAutoDetect := requestedPool == "auto"
+			cleaned := sanitizeTokens(payload.Tokens)
+			if len(cleaned) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "No valid tokens provided"})
+				return
+			}
+
+			existingRecords, err := state.Repo.GetAccounts(c.Request.Context(), cleaned)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			existing := map[string]struct{}{}
+			for _, record := range existingRecords {
+				if !record.IsDeleted() {
+					existing[record.Token] = struct{}{}
+				}
+			}
+
+			newTokens := make([]string, 0, len(cleaned))
+			for _, token := range cleaned {
+				if _, found := existing[token]; !found {
+					newTokens = append(newTokens, token)
+				}
+			}
+			if len(newTokens) == 0 {
+				c.JSON(http.StatusOK, gin.H{"status": "success", "count": 0, "skipped": len(cleaned), "synced": syncAutoDetect})
+				return
+			}
+
+			initialPool := account.NormalizePool(payload.Pool)
+			upserts := make([]account.Upsert, 0, len(newTokens))
+			for _, token := range newTokens {
+				upserts = append(upserts, account.Upsert{Token: token, Pool: initialPool, Tags: account.NormalizeTags(payload.Tags)})
 			}
 			result, err := state.Repo.UpsertAccounts(c.Request.Context(), upserts)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
+			if syncAutoDetect {
+				_, err = state.Refresh.RefreshTokens(c.Request.Context(), newTokens)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+			} else {
+				go state.Refresh.RefreshOnImport(context.Background(), newTokens)
+			}
 			_ = state.Runtime.Sync(c.Request.Context())
-			go state.Refresh.RefreshOnImport(context.Background(), payload.Tokens)
-			c.JSON(http.StatusOK, gin.H{"status": "success", "count": result.Upserted, "skipped": 0, "synced": true})
+			c.JSON(http.StatusOK, gin.H{"status": "success", "count": result.Upserted, "skipped": len(existing), "synced": syncAutoDetect})
 		})
 
 		api.DELETE("/tokens", func(c *gin.Context) {
@@ -161,21 +258,72 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 				return
 			}
-			records, err := state.Repo.GetAccounts(c.Request.Context(), []string{payload.OldToken})
+			oldToken := account.NormalizeToken(payload.OldToken)
+			newToken := account.NormalizeToken(payload.Token)
+			pool := account.NormalizePool(payload.Pool)
+			if oldToken == "" || newToken == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "Token is required"})
+				return
+			}
+			records, err := state.Repo.GetAccounts(c.Request.Context(), []string{oldToken})
 			if err != nil || len(records) == 0 {
 				c.JSON(http.StatusNotFound, gin.H{"message": "Account not found"})
 				return
 			}
-			upsert := account.Upsert{Token: payload.Token, Pool: payload.Pool, Tags: records[0].Tags, Ext: records[0].Ext}
+			record := records[0]
+			if oldToken != newToken {
+				targetRecords, err := state.Repo.GetAccounts(c.Request.Context(), []string{newToken})
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+				if len(targetRecords) > 0 {
+					c.JSON(http.StatusConflict, gin.H{"message": "Target token already exists"})
+					return
+				}
+			}
+			if oldToken == newToken {
+				_, err := state.Repo.PatchAccounts(c.Request.Context(), []account.Patch{{
+					Token: oldToken,
+					Pool:  ptrString(pool),
+				}})
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+					return
+				}
+				_ = state.Runtime.Sync(c.Request.Context())
+				c.JSON(http.StatusOK, gin.H{"status": "success", "token": newToken, "pool": pool})
+				return
+			}
+			upsert := account.Upsert{Token: newToken, Pool: pool, Tags: record.Tags, Ext: record.Ext}
 			if _, err := state.Repo.UpsertAccounts(c.Request.Context(), []account.Upsert{upsert}); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
-			if payload.OldToken != payload.Token {
-				_, _ = state.Repo.DeleteAccounts(c.Request.Context(), []string{payload.OldToken})
+			patch := account.Patch{
+				Token:          newToken,
+				Pool:           ptrString(pool),
+				Status:         ptrStatus(record.Status),
+				Tags:           record.Tags,
+				Quota:          quotaPatch(record),
+				UsageUseDelta:  ptrInt(record.UsageUseCount),
+				UsageFailDelta: ptrInt(record.UsageFailCount),
+				UsageSyncDelta: ptrInt(record.UsageSyncCount),
+				LastUseAt:      ptrInt64(record.LastUseAt),
+				LastFailAt:     ptrInt64(record.LastFailAt),
+				LastFailReason: ptrString(record.LastFailReason),
+				LastSyncAt:     ptrInt64(record.LastSyncAt),
+				LastClearAt:    ptrInt64(record.LastClearAt),
+				StateReason:    ptrString(record.StateReason),
+				ExtMerge:       record.Ext,
 			}
+			if _, err := state.Repo.PatchAccounts(c.Request.Context(), []account.Patch{patch}); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			_, _ = state.Repo.DeleteAccounts(c.Request.Context(), []string{oldToken})
 			_ = state.Runtime.Sync(c.Request.Context())
-			c.JSON(http.StatusOK, gin.H{"status": "success", "token": payload.Token, "pool": payload.Pool})
+			c.JSON(http.StatusOK, gin.H{"status": "success", "token": newToken, "pool": pool})
 		})
 
 		api.POST("/tokens/disabled", func(c *gin.Context) {
@@ -287,6 +435,71 @@ func Mount(router *gin.Engine, state *app.State) {
 			c.JSON(http.StatusOK, gin.H{"status": "success", "result": gin.H{"deleted": deleted, "missing": len(payload.Names) - deleted}})
 		})
 
+		api.GET("/assets", func(c *gin.Context) {
+			rows, total, err := listAllAssets(c.Request.Context(), state)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"tokens": rows, "total_assets": total})
+		})
+		api.POST("/assets/delete-item", func(c *gin.Context) {
+			var payload struct {
+				Token   string `json:"token"`
+				AssetID string `json:"asset_id"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+			token := strings.TrimSpace(payload.Token)
+			assetID := strings.TrimSpace(payload.AssetID)
+			if token == "" || assetID == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "token and asset_id are required"})
+				return
+			}
+			if err := state.XAI.DeleteAsset(c.Request.Context(), token, assetID); err != nil {
+				applyAssetErrorFeedback(c.Request.Context(), state, token, err)
+				c.JSON(httpStatusForAssetError(err), gin.H{"message": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "success"})
+		})
+		api.POST("/assets/clear-token", func(c *gin.Context) {
+			var payload struct {
+				Token string `json:"token"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+			token := strings.TrimSpace(payload.Token)
+			if token == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "token is required"})
+				return
+			}
+			items, err := state.XAI.ListAssets(c.Request.Context(), token)
+			if err != nil {
+				applyAssetErrorFeedback(c.Request.Context(), state, token, err)
+				c.JSON(httpStatusForAssetError(err), gin.H{"message": err.Error()})
+				return
+			}
+			deleted := 0
+			for _, item := range items {
+				assetID := assetIdentifier(item)
+				if assetID == "" {
+					continue
+				}
+				if err := state.XAI.DeleteAsset(c.Request.Context(), token, assetID); err != nil {
+					applyAssetErrorFeedback(c.Request.Context(), state, token, err)
+					c.JSON(httpStatusForAssetError(err), gin.H{"message": err.Error()})
+					return
+				}
+				deleted++
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "success", "deleted": deleted})
+		})
+
 		api.POST("/batch/refresh", func(c *gin.Context) { dispatchBatch(c, state, "refresh", true) })
 		api.POST("/batch/nsfw", func(c *gin.Context) {
 			enabled := true
@@ -336,8 +549,325 @@ func serializeToken(item account.Record) map[string]any {
 		"status":       item.Status,
 		"quota":        quota,
 		"use_count":    item.UsageUseCount,
+		"fail_count":   item.UsageFailCount,
 		"last_used_at": item.LastUseAt,
 		"tags":         item.Tags,
+	}
+}
+
+func sanitizeTokens(tokens []string) []string {
+	out := make([]string, 0, len(tokens))
+	seen := map[string]struct{}{}
+	for _, raw := range tokens {
+		token := account.NormalizeToken(raw)
+		if token == "" {
+			continue
+		}
+		if _, exists := seen[token]; exists {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func parseTokenImportItems(items []any, pool string) []account.Upsert {
+	normalizedPool := account.NormalizePool(pool)
+	out := make([]account.Upsert, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		token := ""
+		tags := []string(nil)
+		switch typed := item.(type) {
+		case string:
+			token = typed
+		case map[string]any:
+			if raw, ok := typed["token"].(string); ok {
+				token = raw
+			}
+			tags = normalizeAnyStringSlice(typed["tags"])
+		}
+		token = account.NormalizeToken(token)
+		if token == "" {
+			continue
+		}
+		if _, exists := seen[token]; exists {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, account.Upsert{
+			Token: token,
+			Pool:  normalizedPool,
+			Tags:  account.NormalizeTags(tags),
+		})
+	}
+	return out
+}
+
+func quotaPatch(record account.Record) map[string]account.QuotaWindow {
+	out := map[string]account.QuotaWindow{
+		"auto":   record.Quota.Auto,
+		"fast":   record.Quota.Fast,
+		"expert": record.Quota.Expert,
+	}
+	if record.Quota.Heavy != nil {
+		out["heavy"] = record.Quota.Heavy.Clone()
+	}
+	if record.Quota.Grok4_3 != nil {
+		out["grok_4_3"] = record.Quota.Grok4_3.Clone()
+	}
+	return out
+}
+
+func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, error) {
+	pageNum := 1
+	poolCounts := map[string]int{}
+	now := account.NowMS()
+	for {
+		page, err := repo.ListAccounts(ctx, account.ListQuery{
+			Page:           pageNum,
+			PageSize:       2000,
+			IncludeDeleted: false,
+			SortBy:         "updated_at",
+			SortDesc:       true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range page.Items {
+			status := record.EffectiveStatus(now)
+			if record.IsDeleted() || status == account.StatusDisabled {
+				continue
+			}
+			poolCounts[record.Pool]++
+		}
+		if int64(pageNum*2000) >= page.Total || len(page.Items) == 0 {
+			break
+		}
+		pageNum++
+	}
+
+	activePools := make([]string, 0, len(poolCounts))
+	for _, pool := range []string{"basic", "super", "heavy"} {
+		if poolCounts[pool] > 0 {
+			activePools = append(activePools, pool)
+		}
+	}
+
+	grouped := map[string][]gin.H{
+		"chat":       {},
+		"image":      {},
+		"image_edit": {},
+		"video":      {},
+	}
+	for _, spec := range model.All() {
+		if !modelAvailableForPools(spec, activePools) {
+			continue
+		}
+		grouped[modelCategory(spec)] = append(grouped[modelCategory(spec)], gin.H{
+			"id":          spec.Name,
+			"name":        spec.Name,
+			"public_name": spec.PublicName,
+			"pool":        spec.Pool,
+			"mode":        spec.Mode,
+		})
+	}
+
+	return gin.H{
+		"pools": gin.H{
+			"active": activePools,
+			"counts": poolCounts,
+		},
+		"groups": grouped,
+	}, nil
+}
+
+func modelAvailableForPools(spec model.Spec, pools []string) bool {
+	if len(pools) == 0 {
+		return false
+	}
+	candidates := spec.PoolCandidates()
+	for _, pool := range pools {
+		if slicesContains(candidates, account.NormalizePool(pool)) {
+			return true
+		}
+	}
+	return false
+}
+
+func modelCategory(spec model.Spec) string {
+	switch {
+	case spec.IsImageEdit():
+		return "image_edit"
+	case spec.IsImage():
+		return "image"
+	case spec.IsVideo():
+		return "video"
+	default:
+		return "chat"
+	}
+}
+
+func slicesContains(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func listAllAssets(ctx context.Context, state *app.State) ([]map[string]any, int, error) {
+	tokens, err := listManageableTokens(ctx, state.Repo)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(tokens) == 0 {
+		return []map[string]any{}, 0, nil
+	}
+
+	rows := make([]map[string]any, len(tokens))
+	var total int
+	var totalMu sync.Mutex
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 8)
+
+	for index, token := range tokens {
+		wg.Add(1)
+		go func(idx int, token string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			items, err := state.XAI.ListAssets(ctx, token)
+			if err != nil {
+				applyAssetErrorFeedback(ctx, state, token, err)
+				rows[idx] = assetRow(token, nil, err.Error())
+				return
+			}
+			rows[idx] = assetRow(token, items, "")
+			totalMu.Lock()
+			total += len(items)
+			totalMu.Unlock()
+		}(index, token)
+	}
+	wg.Wait()
+	return rows, total, nil
+}
+
+func listManageableTokens(ctx context.Context, repo account.Repository) ([]string, error) {
+	pageNum := 1
+	tokens := make([]string, 0, 64)
+	now := account.NowMS()
+	for {
+		page, err := repo.ListAccounts(ctx, account.ListQuery{
+			Page:           pageNum,
+			PageSize:       2000,
+			IncludeDeleted: false,
+			SortBy:         "updated_at",
+			SortDesc:       true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range page.Items {
+			status := record.EffectiveStatus(now)
+			if record.IsDeleted() || (status != account.StatusActive && status != account.StatusCooling) {
+				continue
+			}
+			tokens = append(tokens, record.Token)
+		}
+		if int64(pageNum*2000) >= page.Total || len(page.Items) == 0 {
+			break
+		}
+		pageNum++
+	}
+	sort.Strings(tokens)
+	return tokens, nil
+}
+
+func assetRow(token string, items []map[string]any, errorText string) map[string]any {
+	assets := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		assets = append(assets, map[string]any{
+			"id":           stringValue(item["id"], item["assetId"]),
+			"name":         stringValue(item["fileName"], item["name"]),
+			"file_path":    stringValue(item["filePath"], item["file_path"]),
+			"content_type": stringValue(item["contentType"], item["content_type"]),
+			"size":         intValue(item["fileSize"], item["size"]),
+			"created_at":   stringValue(item["createdAt"], item["created_at"]),
+		})
+	}
+	return map[string]any{
+		"token":  token,
+		"masked": maskToken(token),
+		"count":  len(assets),
+		"assets": assets,
+		"error":  errorText,
+	}
+}
+
+func assetIdentifier(item map[string]any) string {
+	return stringValue(item["id"], item["assetId"])
+}
+
+func maskToken(token string) string {
+	if len(token) <= 20 {
+		return token
+	}
+	return token[:8] + "..." + token[len(token)-8:]
+}
+
+func stringValue(values ...any) string {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return typed
+			}
+		}
+	}
+	return ""
+}
+
+func intValue(values ...any) int64 {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case int:
+			return int64(typed)
+		case int64:
+			return typed
+		case float64:
+			return int64(typed)
+		case json.Number:
+			if parsed, err := typed.Int64(); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func httpStatusForAssetError(err error) int {
+	var upstreamErr *xai.UpstreamError
+	if errors.As(err, &upstreamErr) && upstreamErr.Status > 0 {
+		return upstreamErr.Status
+	}
+	return http.StatusBadGateway
+}
+
+func applyAssetErrorFeedback(ctx context.Context, state *app.State, token string, err error) {
+	var upstreamErr *xai.UpstreamError
+	if !errors.As(err, &upstreamErr) {
+		return
+	}
+	lease := &account.Lease{Token: token}
+	switch upstreamErr.Status {
+	case http.StatusUnauthorized:
+		_ = state.Runtime.ApplyFeedback(ctx, lease, account.Feedback{Kind: account.FeedbackUnauthorized, Reason: err.Error()})
+	case http.StatusForbidden:
+		_ = state.Runtime.ApplyFeedback(ctx, lease, account.Feedback{Kind: account.FeedbackForbidden, Reason: err.Error()})
 	}
 }
 
@@ -364,20 +894,34 @@ func dispatchBatch(c *gin.Context, state *app.State, kind string, enabled bool) 
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	tokens := payload.Tokens
+	tokens := sanitizeTokens(payload.Tokens)
 	if len(tokens) == 0 {
-		tokens = state.Runtime.TokensByPool("basic")
-		tokens = append(tokens, state.Runtime.TokensByPool("super")...)
-		tokens = append(tokens, state.Runtime.TokensByPool("heavy")...)
+		switch kind {
+		case "refresh":
+			c.JSON(http.StatusBadRequest, gin.H{"message": "No tokens provided"})
+			return
+		case "nsfw", "cache-clear":
+			var err error
+			tokens, err = listManageableTokens(c.Request.Context(), state.Repo)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			if len(tokens) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "No tokens available"})
+				return
+			}
+		}
 	}
 	asyncMode := c.Query("async") == "true"
+	concurrency := batchConcurrency(c, state, kind)
 	if asyncMode {
 		task := state.Tasks.Create(len(tokens))
-		go runBatchTask(task, state, kind, enabled, tokens)
+		go runBatchTask(task, state, kind, enabled, tokens, concurrency)
 		c.JSON(http.StatusOK, gin.H{"status": "success", "task_id": task.ID, "total": len(tokens)})
 		return
 	}
-	result := runBatch(context.Background(), state, kind, enabled, tokens)
+	result := runBatch(context.Background(), state, kind, enabled, tokens, concurrency)
 	c.JSON(http.StatusOK, gin.H{"status": "success", "summary": gin.H{"total": len(tokens), "ok": result.ok, "fail": result.fail}, "results": result.items})
 }
 
@@ -387,23 +931,20 @@ type batchResult struct {
 	items map[string]any
 }
 
-func runBatchTask(task *tasks.Task, state *app.State, kind string, enabled bool, tokens []string) {
-	result := batchResult{items: map[string]any{}}
-	for _, token := range tokens {
+func runBatchTask(task *tasks.Task, state *app.State, kind string, enabled bool, tokens []string, concurrency int) {
+	result := runBatchWithRecorder(context.Background(), state, kind, enabled, tokens, concurrency, func(token string, item map[string]any, err error) {
 		if task.Cancelled {
-			task.FinishCancelled()
 			return
 		}
-		item, err := executeBatchItem(context.Background(), state, kind, enabled, token)
 		if err != nil {
-			result.fail++
-			result.items[token] = gin.H{"error": err.Error()}
 			task.Record(false, token, nil, err.Error())
-			continue
+			return
 		}
-		result.ok++
-		result.items[token] = item
 		task.Record(true, token, item, "")
+	})
+	if task.Cancelled {
+		task.FinishCancelled()
+		return
 	}
 	task.Finish(map[string]any{
 		"status":  "success",
@@ -412,19 +953,34 @@ func runBatchTask(task *tasks.Task, state *app.State, kind string, enabled bool,
 	}, "")
 }
 
-func runBatch(ctx context.Context, state *app.State, kind string, enabled bool, tokens []string) batchResult {
-	result := batchResult{items: map[string]any{}}
-	for _, token := range tokens {
-		item, err := executeBatchItem(ctx, state, kind, enabled, token)
-		if err != nil {
-			result.fail++
-			result.items[token] = gin.H{"error": err.Error()}
-			continue
-		}
-		result.ok++
-		result.items[token] = item
+func runBatch(ctx context.Context, state *app.State, kind string, enabled bool, tokens []string, concurrency int) batchResult {
+	return runBatchWithRecorder(ctx, state, kind, enabled, tokens, concurrency, nil)
+}
+
+func runBatchWithRecorder(ctx context.Context, state *app.State, kind string, enabled bool, tokens []string, concurrency int, onItem func(string, map[string]any, error)) batchResult {
+	type batchItemResult struct {
+		token string
+		item  map[string]any
+		err   error
 	}
-	return result
+	results := platformbatch.Run(tokens, concurrency, func(token string) batchItemResult {
+		item, err := executeBatchItem(ctx, state, kind, enabled, token)
+		return batchItemResult{token: token, item: item, err: err}
+	})
+	out := batchResult{items: map[string]any{}}
+	for _, result := range results {
+		if result.err != nil {
+			out.fail++
+			out.items[result.token] = gin.H{"error": result.err.Error()}
+		} else {
+			out.ok++
+			out.items[result.token] = result.item
+		}
+		if onItem != nil {
+			onItem(result.token, result.item, result.err)
+		}
+	}
+	return out
 }
 
 func executeBatchItem(ctx context.Context, state *app.State, kind string, enabled bool, token string) (map[string]any, error) {
@@ -598,5 +1154,198 @@ func clearLocal(kind string) int {
 	return removed
 }
 
+func ptrInt(value int) *int                          { return &value }
+func ptrInt64(value int64) *int64                    { return &value }
 func ptrString(value string) *string                 { return &value }
 func ptrStatus(value account.Status) *account.Status { return &value }
+
+func sanitizeText(value any, removeAllSpaces bool) string {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	text = cfgCharReplacements.Replace(text)
+	if removeAllSpaces {
+		text = whitespaceRE.ReplaceAllString(text, "")
+	} else {
+		text = strings.TrimSpace(text)
+	}
+	return text
+}
+
+func sanitizeProxyConfig(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	if _, ok := payload["proxy"].(map[string]any); !ok {
+		return payload
+	}
+	sanitizeFields := func(section map[string]any) {
+		for _, field := range []struct {
+			key             string
+			removeAllSpaces bool
+		}{
+			{key: "user_agent"},
+			{key: "cf_cookies"},
+			{key: "cf_clearance", removeAllSpaces: true},
+		} {
+			value, exists := section[field.key]
+			if !exists {
+				continue
+			}
+			section[field.key] = sanitizeText(value, field.removeAllSpaces)
+		}
+	}
+	next := cloneMapAny(payload)
+	proxyCopy, _ := next["proxy"].(map[string]any)
+	sanitizeFields(proxyCopy)
+	if clearance, ok := proxyCopy["clearance"].(map[string]any); ok {
+		sanitizeFields(clearance)
+		proxyCopy["clearance"] = clearance
+	}
+	next["proxy"] = proxyCopy
+	return next
+}
+
+func sanitizeAdminConfigPatch(payload map[string]any) map[string]any {
+	next := sanitizeProxyConfig(payload)
+	return syncUpstreamBlockerConfigPatch(next)
+}
+
+func syncUpstreamBlockerConfigPatch(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	next := cloneMapAny(payload)
+	rawBlocker, exists := next["upstream_blocker"]
+	if !exists {
+		return next
+	}
+	blocker, ok := rawBlocker.(map[string]any)
+	if !ok {
+		return next
+	}
+	keywords := upstreamblocker.NormalizeKeywords(blocker["keywords"])
+	message := strings.TrimSpace(fmt.Sprint(blocker["message"]))
+	if message == "" {
+		message = upstreamblocker.DefaultMessage
+	}
+	normalized := map[string]any{
+		"enabled":        blocker["enabled"] == true,
+		"case_sensitive": blocker["case_sensitive"] == true,
+		"keywords":       keywords,
+		"message":        message,
+	}
+	if normalized["enabled"].(bool) && len(keywords) == 0 {
+		normalized["__validation_error"] = "启用上游拦截时，至少需要配置一个关键词。"
+	}
+	if blocker["enabled"] == true && strings.TrimSpace(fmt.Sprint(blocker["message"])) == "" {
+		normalized["__validation_error"] = "上游拦截提示文案不能为空。"
+	}
+	next["upstream_blocker"] = normalized
+	return next
+}
+
+func ensureRuntimePatchAllowed(payload map[string]any) error {
+	if blocker, ok := payload["upstream_blocker"].(map[string]any); ok {
+		if raw, exists := blocker["__validation_error"]; exists {
+			return fmt.Errorf("%v", raw)
+		}
+	}
+	for _, path := range patchPaths(payload, "") {
+		for _, blocked := range startupOnlyPrefixes {
+			if path == blocked || strings.HasPrefix(path, blocked+".") {
+				return fmt.Errorf("Storage config is startup-only and must be set via env")
+			}
+		}
+	}
+	return nil
+}
+
+func patchPaths(value any, prefix string) []string {
+	node, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	for key, child := range node {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		if _, ok := child.(map[string]any); ok {
+			out = append(out, patchPaths(child, path)...)
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+func cloneMapAny(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		switch typed := value.(type) {
+		case map[string]any:
+			out[key] = cloneMapAny(typed)
+		case []any:
+			copied := make([]any, len(typed))
+			copy(copied, typed)
+			out[key] = copied
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func batchConcurrency(c *gin.Context, state *app.State, kind string) int {
+	if raw := strings.TrimSpace(c.Query("concurrency")); raw != "" {
+		var parsed int
+		if _, err := fmt.Sscanf(raw, "%d", &parsed); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	key := "batch.refresh_concurrency"
+	switch kind {
+	case "nsfw":
+		key = "batch.nsfw_concurrency"
+	case "cache-clear":
+		key = "batch.asset_delete_concurrency"
+	}
+	value := state.Config.GetInt(key, 10)
+	if value <= 0 {
+		return 10
+	}
+	return value
+}
+
+func parseAccountListQuery(c *gin.Context) account.ListQuery {
+	page := 1
+	pageSize := 50
+	if raw := strings.TrimSpace(c.Query("page")); raw != "" {
+		_, _ = fmt.Sscanf(raw, "%d", &page)
+	}
+	if raw := strings.TrimSpace(c.Query("page_size")); raw != "" {
+		_, _ = fmt.Sscanf(raw, "%d", &pageSize)
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 2000 {
+		pageSize = 2000
+	}
+	return account.ListQuery{
+		Page:           page,
+		PageSize:       pageSize,
+		Pool:           strings.TrimSpace(c.Query("pool")),
+		Status:         account.Status(strings.TrimSpace(c.Query("status"))),
+		NSFW:           strings.TrimSpace(c.Query("nsfw")),
+		IncludeDeleted: false,
+		SortBy:         "updated_at",
+		SortDesc:       true,
+	}
+}

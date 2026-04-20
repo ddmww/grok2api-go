@@ -55,6 +55,18 @@ image_format = "grok_url"
 video_format = "grok_url"
 
 
+# ==================== 上游拦截 ====================
+[upstream_blocker]
+# 是否启用上游关键词拦截（仅影响非流式文本接口）
+enabled = false
+# 是否大小写敏感
+case_sensitive = false
+# 命中后改为返回 403 的关键词列表
+keywords = []
+# 命中后的固定错误提示
+message = "上游渠道商拦截了当前请求，请尝试换个说法后重试，或稍后再试。"
+
+
 # ==================== 代理配置 ====================
 [proxy.egress]
 # 出口模式：direct | single_proxy | proxy_pool
@@ -116,6 +128,10 @@ timeout = 60
 
 # ==================== 图像配置 ====================
 [image]
+# 生图通道：auto / app_chat / websocket
+backend = "auto"
+# 等待最终图的超时秒数
+final_timeout = 15
 timeout = 60
 stream_timeout = 60
 

@@ -46,10 +46,11 @@ type QuotaWindow struct {
 func (q QuotaWindow) Clone() QuotaWindow { return q }
 
 type QuotaSet struct {
-	Auto   QuotaWindow  `json:"auto"`
-	Fast   QuotaWindow  `json:"fast"`
-	Expert QuotaWindow  `json:"expert"`
-	Heavy  *QuotaWindow `json:"heavy,omitempty"`
+	Auto    QuotaWindow  `json:"auto"`
+	Fast    QuotaWindow  `json:"fast"`
+	Expert  QuotaWindow  `json:"expert"`
+	Heavy   *QuotaWindow `json:"heavy,omitempty"`
+	Grok4_3 *QuotaWindow `json:"grok_4_3,omitempty"`
 }
 
 func (q QuotaSet) ToMap() map[string]QuotaWindow {
@@ -60,6 +61,9 @@ func (q QuotaSet) ToMap() map[string]QuotaWindow {
 	}
 	if q.Heavy != nil {
 		out["heavy"] = *q.Heavy
+	}
+	if q.Grok4_3 != nil {
+		out["grok_4_3"] = *q.Grok4_3
 	}
 	return out
 }
@@ -72,6 +76,8 @@ func (q QuotaSet) Window(mode string) *QuotaWindow {
 		return &q.Expert
 	case "heavy":
 		return q.Heavy
+	case "grok-420-computer-use-sa", "grok_4_3":
+		return q.Grok4_3
 	default:
 		return &q.Auto
 	}
@@ -89,6 +95,10 @@ func normalizeToken(raw string) string {
 	}
 	value = strings.TrimSpace(value)
 	return value
+}
+
+func NormalizeToken(raw string) string {
+	return normalizeToken(raw)
 }
 
 func NormalizePool(raw string) string {
@@ -179,18 +189,22 @@ func DefaultQuotaSet(pool string) QuotaSet {
 	}
 	switch NormalizePool(pool) {
 	case "super":
+		grok43 := makeWindow(50, 50, 7200)
 		return QuotaSet{
-			Auto:   makeWindow(50, 50, 7200),
-			Fast:   makeWindow(140, 140, 7200),
-			Expert: makeWindow(50, 50, 7200),
+			Auto:    makeWindow(50, 50, 7200),
+			Fast:    makeWindow(140, 140, 7200),
+			Expert:  makeWindow(50, 50, 7200),
+			Grok4_3: &grok43,
 		}
 	case "heavy":
 		heavy := makeWindow(20, 20, 7200)
+		grok43 := makeWindow(150, 150, 7200)
 		return QuotaSet{
-			Auto:   makeWindow(150, 150, 7200),
-			Fast:   makeWindow(400, 400, 7200),
-			Expert: makeWindow(150, 150, 7200),
-			Heavy:  &heavy,
+			Auto:    makeWindow(150, 150, 7200),
+			Fast:    makeWindow(400, 400, 7200),
+			Expert:  makeWindow(150, 150, 7200),
+			Heavy:   &heavy,
+			Grok4_3: &grok43,
 		}
 	default:
 		return QuotaSet{
@@ -204,7 +218,9 @@ func DefaultQuotaSet(pool string) QuotaSet {
 func SupportedModes(pool string) []string {
 	switch NormalizePool(pool) {
 	case "heavy":
-		return []string{"auto", "fast", "expert", "heavy"}
+		return []string{"auto", "fast", "expert", "heavy", "grok-420-computer-use-sa"}
+	case "super":
+		return []string{"auto", "fast", "expert", "grok-420-computer-use-sa"}
 	default:
 		return []string{"auto", "fast", "expert"}
 	}
@@ -232,6 +248,10 @@ func CloneRecord(record Record) Record {
 	if record.Quota.Heavy != nil {
 		heavy := record.Quota.Heavy.Clone()
 		copyRecord.Quota.Heavy = &heavy
+	}
+	if record.Quota.Grok4_3 != nil {
+		grok43 := record.Quota.Grok4_3.Clone()
+		copyRecord.Quota.Grok4_3 = &grok43
 	}
 	return copyRecord
 }
@@ -285,6 +305,7 @@ type ListQuery struct {
 	Pool           string
 	Status         Status
 	Tags           []string
+	NSFW           string
 	IncludeDeleted bool
 	SortBy         string
 	SortDesc       bool
@@ -297,6 +318,17 @@ type Page struct {
 	PageSize   int      `json:"page_size"`
 	TotalPages int      `json:"total_pages"`
 	Revision   int64    `json:"revision"`
+}
+
+type Summary struct {
+	Total      int64            `json:"total"`
+	Status     map[string]int64 `json:"status"`
+	Pool       map[string]int64 `json:"pool"`
+	NSFW       map[string]int64 `json:"nsfw"`
+	Calls      int64            `json:"calls"`
+	Quota      map[string]int64 `json:"quota"`
+	Revision   int64            `json:"revision"`
+	FilteredBy map[string]any   `json:"filtered_by,omitempty"`
 }
 
 type MutationResult struct {

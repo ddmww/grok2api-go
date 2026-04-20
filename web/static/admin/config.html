@@ -337,8 +337,6 @@ const SCHEMA_DEF = [
           { key: 'app_url', label: 'APP 访问地址', labelKey: 'config.schema.fields.appUrl.label', type: 'text', desc: '应用对外提供服务的根 URL，格式如 https://your-domain.com。本地代理模式必须配置。', descKey: 'config.schema.fields.appUrl.desc', wide: true },
           { key: 'app_key', label: 'APP 访问密码', labelKey: 'config.schema.fields.appKey.label', type: 'password', desc: '管理后台鉴权密码。修改后已有 Session 将立即失效，需重新登录。', descKey: 'config.schema.fields.appKey.desc', rand: true },
           { key: 'api_key', label: 'API 调用密钥', labelKey: 'config.schema.fields.apiKey.label', type: 'text', desc: 'OpenAI 兼容 API 的鉴权密钥。多个值请使用英文逗号分隔；留空则禁用鉴权。', descKey: 'config.schema.fields.apiKey.desc', rand: true },
-          { key: 'webui_enabled', label: '启用 WebUI', labelKey: 'config.schema.fields.webuiEnabled.label', type: 'bool', desc: '开放 WebUI 功能入口。关闭后相关路由将返回 404。', descKey: 'config.schema.fields.webuiEnabled.desc' },
-          { key: 'webui_key', label: 'WebUI 访问密码', labelKey: 'config.schema.fields.webuiKey.label', type: 'password', desc: 'WebUI 的访问鉴权密码。配置后访问时必须提供。', descKey: 'config.schema.fields.webuiKey.desc', rand: true, showIf: 'app.webui_enabled' },
         ]
       },
       {
@@ -420,6 +418,30 @@ const SCHEMA_DEF = [
             ],
             desc: 'local_* 模式会先将视频下载至服务端，再通过本地 URL 代理分发；请确保已配置 APP 访问地址，并评估出站带宽消耗。',
             descKey: 'config.schema.fields.videoFormat.desc',
+          },
+        ]
+      },
+      {
+        title: '图片生成策略',
+        section: 'image',
+        fields: [
+          {
+            key: 'backend',
+            label: '生图通道',
+            type: 'select',
+            options: [
+              { value: 'auto', label: '自动回退（app_chat -> websocket）' },
+              { value: 'app_chat', label: '仅 app_chat' },
+              { value: 'websocket', label: '仅 websocket' },
+            ],
+            desc: '控制图片生成主通道。auto 会优先走 app_chat，失败或无最终图时自动回退到 websocket；不启用搜图兜底。',
+          },
+          {
+            key: 'final_timeout',
+            label: '等待最终图超时（秒）',
+            type: 'number',
+            defaultValue: 15,
+            desc: '图片生成过程中等待最终图的宽限时间。默认 15 秒；超过该时间仍无最终图时，会按当前已收集到的最高质量中间图返回。',
           },
         ]
       },
@@ -607,6 +629,16 @@ const SCHEMA_DEF = [
         ]
       },
       {
+        title: '上游关键词拦截',
+        section: 'upstream_blocker',
+        fields: [
+          { key: 'enabled', label: '启用上游拦截', type: 'bool', desc: '命中关键词时，将非流式文本响应改写为 403 upstream_blocked 错误。流式、图片和视频接口不受影响。' },
+          { key: 'case_sensitive', label: '区分大小写', type: 'bool', desc: '关闭时按不区分大小写方式匹配关键词，行为与 Python 版 upstream_blocker 一致。' },
+          { key: 'keywords', label: '拦截关键词', type: 'textarea', format: 'lines', desc: '每行一个关键词。只要上游成功返回的文本包含任意关键词，就会拦截该响应。启用时至少需要填写一个关键词。' },
+          { key: 'message', label: '返回错误文案', type: 'textarea', desc: '命中关键词后返回给下游的错误消息。留空会被后端拒绝保存。' },
+        ]
+      },
+      {
         title: '请求超时设置', titleKey: 'config.schema.groups.timeouts',
         section: 'chat',
         fields: [
@@ -744,6 +776,14 @@ function _getCurrentValue(section, key) {
   return fp in _dirty ? _dirty[fp] : _getValue(section, key);
 }
 
+function _serializeFieldValue(field, value) {
+  if (field.type === 'textarea' && field.format === 'lines') {
+    if (Array.isArray(value)) return value.map(v => String(v ?? '').trim()).filter(Boolean).join('\n');
+    return value == null ? '' : String(value);
+  }
+  return value;
+}
+
 // ── Render ──────────────────────────────────────────────────────────────────
 function _el(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -763,8 +803,9 @@ function renderInput(field, section, value) {
   const fp = _fullPath(section, field.key);
 
   const onChange = (v) => {
-    const orig = _getValue(section, field.key);
-    const same = String(orig) === String(v) || orig === v;
+    const orig = _serializeFieldValue(field, _getValue(section, field.key));
+    const next = _serializeFieldValue(field, v);
+    const same = String(orig ?? '') === String(next ?? '');
     if (same) delete _dirty[fp]; else _dirty[fp] = v;
     _refreshRow(section, field.key);
     _refreshDirtyState();
@@ -804,14 +845,14 @@ function renderInput(field, section, value) {
   if (field.type === 'textarea') {
     const ta = _el('textarea', { class: 'cfg-textarea', id: `field-${section}-${field.key}`,
       rows: '3', placeholder: '' });
-    ta.value = value ?? '';
+    ta.value = _serializeFieldValue(field, value) ?? '';
     ta.addEventListener('input', () => onChange(ta.value));
     return ta;
   }
 
   if (field.type === 'number') {
     const inp = _el('input', { class: 'cfg-number', type: 'number',
-      id: `field-${section}-${field.key}`, value: value ?? '' });
+      id: `field-${section}-${field.key}`, value: value ?? '', placeholder: field.defaultValue != null ? String(field.defaultValue) : '' });
     inp.addEventListener('input', () => {
       const n = inp.value === '' ? '' : Number(inp.value);
       onChange(n);
@@ -852,20 +893,6 @@ function renderRow(field, section) {
   const dot   = _el('span', { class: 'cfg-modified-dot' });
   const input = renderInput(field, section, isDirty ? _dirty[fp] : value);
   const labelChildren = [field.label];
-
-  if (section === 'app' && field.key === 'webui_enabled') {
-    const btn = _el('button', {
-      class: 'cfg-inline-action',
-      type: 'button',
-      title: '打开 WebUI',
-      'aria-label': '打开 WebUI',
-      'data-webui-link': 'true',
-      onclick: () => window.open('/webui/login', '_blank', 'noopener,noreferrer'),
-    });
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5"/><path d="M10 14 19 5"/><path d="M19 14v5h-14v-14h5"/></svg>';
-    btn.disabled = !Boolean(_getCurrentValue(section, field.key));
-    labelChildren.push(btn);
-  }
 
   labelChildren.push(dot);
 
@@ -950,14 +977,6 @@ function _refreshDirtyState({ autoNormalizeSelects = true } = {}) {
       : n === 1
         ? tr('config.unsavedSingle', { n }, '存在 1 项未保存的更改')
         : tr('config.unsavedMultiple', { n }, `存在 ${n} 项未保存的更改`);
-
-  const webuiLinkBtn = document.querySelector('[data-webui-link="true"]');
-  if (webuiLinkBtn) {
-    const enabled = Boolean(_getCurrentValue('app', 'webui_enabled'));
-    webuiLinkBtn.disabled = !enabled;
-    webuiLinkBtn.title = enabled ? '打开 WebUI' : '启用 WebUI 后可打开';
-    webuiLinkBtn.setAttribute('aria-label', webuiLinkBtn.title);
-  }
 
   // Update showIf conditional rows
   document.querySelectorAll('.cfg-row[data-show-if]').forEach(row => {

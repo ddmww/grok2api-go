@@ -22,6 +22,7 @@ type Repository interface {
 	RuntimeSnapshot(context.Context) ([]Record, int64, error)
 	GetAccounts(context.Context, []string) ([]Record, error)
 	ListAccounts(context.Context, ListQuery) (Page, error)
+	SummarizeAccounts(context.Context, ListQuery) (Summary, error)
 	UpsertAccounts(context.Context, []Upsert) (MutationResult, error)
 	PatchAccounts(context.Context, []Patch) (MutationResult, error)
 	DeleteAccounts(context.Context, []string) (MutationResult, error)
@@ -47,6 +48,7 @@ type accountEntity struct {
 	QuotaFastJSON   string `gorm:"column:quota_fast"`
 	QuotaExpertJSON string `gorm:"column:quota_expert"`
 	QuotaHeavyJSON  string `gorm:"column:quota_heavy"`
+	QuotaGrok43JSON string `gorm:"column:quota_grok_4_3"`
 	UsageUseCount   int    `gorm:"column:usage_use_count"`
 	UsageFailCount  int    `gorm:"column:usage_fail_count"`
 	UsageSyncCount  int    `gorm:"column:usage_sync_count"`
@@ -183,6 +185,12 @@ func entityToRecord(entity accountEntity) Record {
 			record.Quota.Heavy = &heavy
 		}
 	}
+	if strings.TrimSpace(entity.QuotaGrok43JSON) != "" && strings.TrimSpace(entity.QuotaGrok43JSON) != "{}" {
+		var grok43 QuotaWindow
+		if err := json.Unmarshal([]byte(entity.QuotaGrok43JSON), &grok43); err == nil {
+			record.Quota.Grok4_3 = &grok43
+		}
+	}
 	return record
 }
 
@@ -198,6 +206,7 @@ func recordToEntity(record Record) accountEntity {
 		QuotaFastJSON:   mustJSON(record.Quota.Fast),
 		QuotaExpertJSON: mustJSON(record.Quota.Expert),
 		QuotaHeavyJSON:  mustJSON(record.Quota.Heavy),
+		QuotaGrok43JSON: mustJSON(record.Quota.Grok4_3),
 		UsageUseCount:   record.UsageUseCount,
 		UsageFailCount:  record.UsageFailCount,
 		UsageSyncCount:  record.UsageSyncCount,
@@ -277,16 +286,11 @@ func (r *gormRepository) ListAccounts(ctx context.Context, query ListQuery) (Pag
 	if query.PageSize <= 0 {
 		query.PageSize = 50
 	}
+	if query.PageSize > 2000 {
+		query.PageSize = 2000
+	}
 	db := r.db.WithContext(ctx).Model(&accountEntity{})
-	if !query.IncludeDeleted {
-		db = db.Where("deleted_at = 0")
-	}
-	if pool := NormalizePool(query.Pool); query.Pool != "" {
-		db = db.Where("pool = ?", pool)
-	}
-	if query.Status != "" {
-		db = db.Where("status = ?", string(query.Status))
-	}
+	db = applyListQuery(db, query)
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return Page{}, err
@@ -318,6 +322,188 @@ func (r *gormRepository) ListAccounts(ctx context.Context, query ListQuery) (Pag
 	return Page{Items: items, Total: total, Page: query.Page, PageSize: query.PageSize, TotalPages: totalPages, Revision: revision}, nil
 }
 
+func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery) (Summary, error) {
+	newScope := func(q ListQuery) *gorm.DB {
+		return applyListQuery(r.db.WithContext(ctx).Model(&accountEntity{}), q)
+	}
+	filtered := newScope(query)
+
+	revision, err := r.GetRevision(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+
+	summary := Summary{
+		Status:   map[string]int64{"all": 0, "active": 0, "cooling": 0, "invalid": 0, "disabled": 0},
+		Pool:     map[string]int64{"all": 0, "basic": 0, "super": 0, "heavy": 0},
+		NSFW:     map[string]int64{"all": 0, "enabled": 0, "disabled": 0},
+		Quota:    map[string]int64{"auto": 0, "fast": 0, "expert": 0, "heavy": 0},
+		Revision: revision,
+		FilteredBy: map[string]any{
+			"pool":   query.Pool,
+			"status": string(query.Status),
+			"nsfw":   query.NSFW,
+		},
+	}
+
+	if err := filtered.Count(&summary.Total).Error; err != nil {
+		return Summary{}, err
+	}
+	summary.Pool["all"] = summary.Total
+	summary.NSFW["all"] = summary.Total
+
+	var calls int64
+	if err := filtered.Select("COALESCE(SUM(usage_use_count + usage_fail_count), 0)").Scan(&calls).Error; err != nil {
+		return Summary{}, err
+	}
+	summary.Calls = calls
+
+	for _, quotaField := range []struct {
+		name   string
+		column string
+	}{
+		{name: "auto", column: quotaRemainingExpr(r.storageType, "quota_auto")},
+		{name: "fast", column: quotaRemainingExpr(r.storageType, "quota_fast")},
+		{name: "expert", column: quotaRemainingExpr(r.storageType, "quota_expert")},
+		{name: "heavy", column: quotaRemainingExpr(r.storageType, "quota_heavy")},
+	} {
+		var total int64
+		if err := filtered.Select("COALESCE(SUM(" + quotaField.column + "), 0)").Scan(&total).Error; err != nil {
+			return Summary{}, err
+		}
+		summary.Quota[quotaField.name] = total
+	}
+
+	statusScope := newScope(queryWithoutStatus(query))
+	var statusAll int64
+	if err := countInto(statusScope, &statusAll); err != nil {
+		return Summary{}, err
+	}
+	summary.Status["all"] = statusAll
+	var statusActive int64
+	if err := countInto(statusScope.Where("status = ?", string(StatusActive)), &statusActive); err != nil {
+		return Summary{}, err
+	}
+	summary.Status["active"] = statusActive
+	var statusCooling int64
+	if err := countInto(statusScope.Where("status = ?", string(StatusCooling)), &statusCooling); err != nil {
+		return Summary{}, err
+	}
+	summary.Status["cooling"] = statusCooling
+	var statusDisabled int64
+	if err := countInto(statusScope.Where("status = ?", string(StatusDisabled)), &statusDisabled); err != nil {
+		return Summary{}, err
+	}
+	summary.Status["disabled"] = statusDisabled
+	summary.Status["invalid"] = summary.Status["all"] - summary.Status["active"] - summary.Status["cooling"] - summary.Status["disabled"]
+	if summary.Status["invalid"] < 0 {
+		summary.Status["invalid"] = 0
+	}
+
+	poolScope := newScope(queryWithoutPool(query))
+	var poolAll int64
+	if err := countInto(poolScope, &poolAll); err != nil {
+		return Summary{}, err
+	}
+	summary.Pool["all"] = poolAll
+	for _, pool := range []string{"basic", "super", "heavy"} {
+		var poolCount int64
+		if err := countInto(poolScope.Where("pool = ?", pool), &poolCount); err != nil {
+			return Summary{}, err
+		}
+		summary.Pool[pool] = poolCount
+	}
+
+	nsfwScope := newScope(queryWithoutNSFW(query))
+	var nsfwAll int64
+	if err := countInto(nsfwScope, &nsfwAll); err != nil {
+		return Summary{}, err
+	}
+	summary.NSFW["all"] = nsfwAll
+	var nsfwEnabled int64
+	if err := countInto(nsfwScope.Where(tagsContainsClause(), tagsLikePattern("nsfw")), &nsfwEnabled); err != nil {
+		return Summary{}, err
+	}
+	summary.NSFW["enabled"] = nsfwEnabled
+	summary.NSFW["disabled"] = summary.NSFW["all"] - summary.NSFW["enabled"]
+	if summary.NSFW["disabled"] < 0 {
+		summary.NSFW["disabled"] = 0
+	}
+
+	return summary, nil
+}
+
+func applyListQuery(db *gorm.DB, query ListQuery) *gorm.DB {
+	if !query.IncludeDeleted {
+		db = db.Where("deleted_at = 0")
+	}
+	if pool := NormalizePool(query.Pool); query.Pool != "" {
+		db = db.Where("pool = ?", pool)
+	}
+	switch query.Status {
+	case "":
+	case Status("invalid"):
+		db = db.Where("status NOT IN ?", []string{string(StatusActive), string(StatusCooling), string(StatusDisabled)})
+	default:
+		db = db.Where("status = ?", string(query.Status))
+	}
+	for _, tag := range NormalizeTags(query.Tags) {
+		db = db.Where(tagsContainsClause(), tagsLikePattern(tag))
+	}
+	switch strings.ToLower(strings.TrimSpace(query.NSFW)) {
+	case "enabled":
+		db = db.Where(tagsContainsClause(), tagsLikePattern("nsfw"))
+	case "disabled":
+		db = db.Where(tagsNotContainsClause(), tagsLikePattern("nsfw"))
+	}
+	return db
+}
+
+func queryWithoutStatus(query ListQuery) ListQuery {
+	query.Status = ""
+	return query
+}
+
+func queryWithoutPool(query ListQuery) ListQuery {
+	query.Pool = ""
+	return query
+}
+
+func queryWithoutNSFW(query ListQuery) ListQuery {
+	query.NSFW = ""
+	return query
+}
+
+func countInto(db *gorm.DB, dest *int64) error {
+	return db.Count(dest).Error
+}
+
+func tagsContainsClause() string {
+	return `tags LIKE ? ESCAPE '\'`
+}
+
+func tagsNotContainsClause() string {
+	return `(tags NOT LIKE ? ESCAPE '\' OR tags IS NULL OR tags = '')`
+}
+
+func tagsLikePattern(tag string) string {
+	return "%" + escapeLike(`"`+tag+`"`) + "%"
+}
+
+func escapeLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
+}
+
+func quotaRemainingExpr(storageType, column string) string {
+	switch storageType {
+	case "mysql":
+		return fmt.Sprintf(`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(%s, '$.remaining')), '0') AS UNSIGNED)`, column)
+	default:
+		return fmt.Sprintf(`CAST(COALESCE(json_extract(%s, '$.remaining'), 0) AS INTEGER)`, column)
+	}
+}
+
 func (r *gormRepository) UpsertAccounts(ctx context.Context, items []Upsert) (MutationResult, error) {
 	if len(items) == 0 {
 		return MutationResult{}, nil
@@ -347,6 +533,7 @@ func (r *gormRepository) UpsertAccounts(ctx context.Context, items []Upsert) (Mu
 				QuotaFastJSON:   mustJSON(quota.Fast),
 				QuotaExpertJSON: mustJSON(quota.Expert),
 				QuotaHeavyJSON:  mustJSON(quota.Heavy),
+				QuotaGrok43JSON: mustJSON(quota.Grok4_3),
 				ExtJSON:         mustJSON(item.Ext),
 				Revision:        revision,
 			}
@@ -456,6 +643,9 @@ func (r *gormRepository) PatchAccounts(ctx context.Context, patches []Patch) (Mu
 				case "heavy":
 					q := quota
 					updated.Quota.Heavy = &q
+				case "grok-420-computer-use-sa", "grok_4_3":
+					q := quota
+					updated.Quota.Grok4_3 = &q
 				}
 			}
 			if updated.Ext == nil {
@@ -491,6 +681,7 @@ func (r *gormRepository) PatchAccounts(ctx context.Context, patches []Patch) (Mu
 				"quota_fast":       next.QuotaFastJSON,
 				"quota_expert":     next.QuotaExpertJSON,
 				"quota_heavy":      next.QuotaHeavyJSON,
+				"quota_grok_4_3":   next.QuotaGrok43JSON,
 				"usage_use_count":  next.UsageUseCount,
 				"usage_fail_count": next.UsageFailCount,
 				"usage_sync_count": next.UsageSyncCount,
@@ -606,6 +797,7 @@ func (r *gormRepository) ReplacePool(ctx context.Context, pool string, items []U
 				QuotaFastJSON:   mustJSON(quota.Fast),
 				QuotaExpertJSON: mustJSON(quota.Expert),
 				QuotaHeavyJSON:  mustJSON(quota.Heavy),
+				QuotaGrok43JSON: mustJSON(quota.Grok4_3),
 				ExtJSON:         mustJSON(item.Ext),
 				Revision:        revision,
 			}

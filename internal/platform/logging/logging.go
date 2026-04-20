@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -11,7 +12,7 @@ import (
 )
 
 var (
-	once   sync.Once
+	mu     sync.RWMutex
 	logger *slog.Logger
 )
 
@@ -29,27 +30,39 @@ func levelFromString(raw string) slog.Level {
 }
 
 func Setup(level string, fileEnabled bool) *slog.Logger {
-	once.Do(func() {
-		writers := []io.Writer{os.Stdout}
-		if fileEnabled {
-			if err := os.MkdirAll(paths.LogDir(), 0o755); err == nil {
-				file, err := os.OpenFile(paths.LogDir()+string(os.PathSeparator)+"server.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-				if err == nil {
-					writers = append(writers, file)
-				}
-			}
-		}
-		handler := slog.NewTextHandler(io.MultiWriter(writers...), &slog.HandlerOptions{
-			Level: levelFromString(level),
-		})
-		logger = slog.New(handler)
-	})
+	mu.Lock()
+	defer mu.Unlock()
+	logger = newLogger(level, fileEnabled)
 	return logger
 }
 
 func L() *slog.Logger {
-	if logger == nil {
-		return Setup("INFO", false)
+	mu.RLock()
+	current := logger
+	mu.RUnlock()
+	if current != nil {
+		return current
 	}
-	return logger
+	return Setup("INFO", false)
+}
+
+func ReloadFileLogging(level string, enabled bool) *slog.Logger {
+	return Setup(level, enabled)
+}
+
+func newLogger(level string, fileEnabled bool) *slog.Logger {
+	writers := []io.Writer{os.Stdout}
+	if fileEnabled {
+		if err := os.MkdirAll(paths.LogDir(), 0o755); err == nil {
+			filePath := filepath.Join(paths.LogDir(), "server.log")
+			file, err := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+			if err == nil {
+				writers = append(writers, file)
+			}
+		}
+	}
+	handler := slog.NewTextHandler(io.MultiWriter(writers...), &slog.HandlerOptions{
+		Level: levelFromString(level),
+	})
+	return slog.New(handler)
 }

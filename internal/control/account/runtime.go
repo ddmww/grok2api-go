@@ -82,6 +82,10 @@ func (r *Runtime) Pools() []string {
 }
 
 func (r *Runtime) Reserve(spec model.Spec) (*Lease, error) {
+	return r.ReserveWithExclude(spec, nil)
+}
+
+func (r *Runtime) ReserveWithExclude(spec model.Spec, excluded map[string]struct{}) (*Lease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := NowMS()
@@ -89,6 +93,9 @@ func (r *Runtime) Reserve(spec model.Spec) (*Lease, error) {
 		var candidates []*runtimeItem
 		for _, item := range r.items {
 			record := item.record
+			if _, skip := excluded[record.Token]; skip {
+				continue
+			}
 			if record.Pool != pool || record.IsDeleted() || record.EffectiveStatus(now) != StatusActive {
 				continue
 			}

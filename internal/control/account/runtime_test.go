@@ -20,6 +20,9 @@ func (s *stubRepository) RuntimeSnapshot(context.Context) ([]Record, int64, erro
 }
 func (s *stubRepository) GetAccounts(context.Context, []string) ([]Record, error) { return nil, nil }
 func (s *stubRepository) ListAccounts(context.Context, ListQuery) (Page, error)   { return Page{}, nil }
+func (s *stubRepository) SummarizeAccounts(context.Context, ListQuery) (Summary, error) {
+	return Summary{}, nil
+}
 func (s *stubRepository) UpsertAccounts(context.Context, []Upsert) (MutationResult, error) {
 	return MutationResult{}, nil
 }

@@ -102,6 +102,11 @@
     }
     .toolbar-icon-btn-danger { color:inherit }
     .toolbar-icon-btn-danger:hover { color:#555 }
+    .toolbar-icon-btn.is-active {
+      color:#111;
+      background:#f3f3f3;
+      border-radius:999px;
+    }
     .toolbar-page-size {
       width:96px !important;
       height:28px;
@@ -334,6 +339,9 @@
         </button>
       </div>
       <div class="table-toolbar-actions">
+        <button class="toolbar-icon-btn" onclick="toggleSelectAllLocal()" id="btn-local-select-all">
+          <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M9 11l2 2 4-4"/><path d="M20 12c0 4.418-3.582 8-8 8s-8-3.582-8-8 3.582-8 8-8c1.39 0 2.698.355 3.837.979"/><path d="M17 5h4v4"/></svg>
+        </button>
         <button class="toolbar-icon-btn toolbar-icon-btn-danger" onclick="clearLocal()" id="btn-clear">
           <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg>
         </button>
@@ -370,12 +378,24 @@
   <!-- ── 在线资产 panel ──────────────────────────────────────────── -->
   <div class="sec-panel" id="panel-online">
     <div class="table-toolbar" style="margin-bottom:14px">
-      <div class="table-toolbar-left">
+      <div class="table-toolbar-left" style="display:flex;align-items:center;gap:6px">
         <span id="asset-summary" class="asset-summary"></span>
+        <button class="pagi-btn" onclick="prevAssetPage()" id="btn-asset-prev" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="pagi-meta">
+          <span class="pagi-page" id="asset-pagi-page">第 0 / 0 页</span>
+        </div>
+        <button class="pagi-btn" onclick="nextAssetPage()" id="btn-asset-next" disabled>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
       </div>
       <div class="table-toolbar-actions">
         <button class="toolbar-icon-btn" onclick="loadAssets()" id="btn-load-assets">
           <svg viewBox="0 0 24 24" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
+        <button class="toolbar-icon-btn" onclick="toggleSelectAllAssets()" id="btn-asset-select-all">
+          <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M9 11l2 2 4-4"/><path d="M20 12c0 4.418-3.582 8-8 8s-8-3.582-8-8 3.582-8 8-8c1.39 0 2.698.355 3.837.979"/><path d="M17 5h4v4"/></svg>
         </button>
         <button class="toolbar-icon-btn toolbar-icon-btn-danger" onclick="clearAllAssets()" id="btn-clear-all-assets" style="display:none">
           <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg>
@@ -386,6 +406,14 @@
         <button class="toolbar-icon-btn toolbar-icon-btn-danger" onclick="cancelAssetClear()" id="btn-asset-cancel" style="display:none">
           <svg viewBox="0 0 24 24" stroke-width="1.8"><path d="M6 6 18 18"/><path d="M18 6 6 18"/></svg>
         </button>
+        <select class="input toolbar-page-size" id="asset-page-size-sel" onchange="changeAssetPageSize(this.value)">
+          <option value="50">50 / 页</option>
+          <option value="100">100 / 页</option>
+          <option value="200">200 / 页</option>
+          <option value="500">500 / 页</option>
+          <option value="1000">1000 / 页</option>
+          <option value="2000">2000 / 页</option>
+        </select>
       </div>
     </div>
 
@@ -415,6 +443,7 @@
 <script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
 <script>
 const PAGE_SIZE_KEY = 'admin.cache.page_size';
+const ASSET_PAGE_SIZE_KEY = 'admin.cache.asset_page_size';
 const PAGE_SIZE_OPTIONS = [50, 100, 200, 500, 1000, 2000];
 const REFRESH_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
 const SPINNER_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="animation:spin .8s linear infinite"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>';
@@ -426,10 +455,14 @@ let _pageSize = loadSavedPageSize();
 let _total = 0;
 let _localItems = [];
 const _localSel = new Set();
+let _localSelectAll = false;
 let _assetData = [];
 let _assetTotal = 0;
+let _assetPage = 1;
+let _assetPageSize = loadSavedAssetPageSize();
 let _expanded = {};
 const _assetSel = new Set();
+let _assetSelectAll = false;
 let _assetTaskId = null;
 let _assetEs = null;
 let _assetLoaded = false;
@@ -455,6 +488,10 @@ function loadSavedPageSize() {
   const raw = Number(localStorage.getItem(PAGE_SIZE_KEY));
   return PAGE_SIZE_OPTIONS.includes(raw) ? raw : 100;
 }
+function loadSavedAssetPageSize() {
+  const raw = Number(localStorage.getItem(ASSET_PAGE_SIZE_KEY));
+  return PAGE_SIZE_OPTIONS.includes(raw) ? raw : 100;
+}
 
 function setLoadAssetsButton(labelKey, fallback, spinning = false) {
   const btn = document.getElementById('btn-load-assets');
@@ -468,9 +505,11 @@ function setLoadAssetsButton(labelKey, fallback, spinning = false) {
 
 function applyToolbarI18n() {
   const tips = [
+    ['btn-local-select-all', 'cache.selectAllResults', '全选全部'],
     ['btn-clear', 'cache.clearCurrent', '清空当前缓存'],
     ['btn-local-delete-selected', 'cache.deleteSelected', '删除选中'],
     ['btn-load-assets', 'cache.loadAssets', '加载资产列表'],
+    ['btn-asset-select-all', 'cache.selectAllResults', '全选全部'],
     ['btn-clear-all-assets', 'cache.clearAll', '清理全部'],
     ['btn-clear-selected-assets', 'cache.clearSelected', '清理选中'],
     ['btn-asset-cancel', 'cache.cancel', '取消'],
@@ -505,11 +544,17 @@ function applyCacheI18n() {
   document.querySelectorAll('#page-size-sel option').forEach((opt) => {
     opt.textContent = tr('cache.pageSizeOption', { n: opt.value }, `${opt.value} / 页`);
   });
+  document.querySelectorAll('#asset-page-size-sel option').forEach((opt) => {
+    opt.textContent = tr('cache.pageSizeOption', { n: opt.value }, `${opt.value} / 页`);
+  });
   const pageSizeSel = document.getElementById('page-size-sel');
   if (pageSizeSel) pageSizeSel.value = String(_pageSize);
+  const assetPageSizeSel = document.getElementById('asset-page-size-sel');
+  if (assetPageSizeSel) assetPageSizeSel.value = String(_assetPageSize);
   applyToolbarI18n();
   setLoadAssetsButton('cache.loadAssets', '加载资产列表');
   _renderPagi();
+  _renderAssetPagi();
   if (_assetData.length) {
     _renderAssets();
     updateAssetSummary();
@@ -560,6 +605,7 @@ async function loadList() {
 
 function _renderTable(items) {
   const tbody = document.getElementById('cache-tbody');
+  if (!_total && _localSelectAll) _localSelectAll = false;
   syncLocalSelectAll();
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="5" class="table-empty">${_esc(tr('cache.emptyLocal', null, '暂无缓存文件'))}</td></tr>`;
@@ -567,7 +613,7 @@ function _renderTable(items) {
   }
   tbody.innerHTML = items.map((f) => `
     <tr>
-      <td><input type="checkbox" class="cb local-row-cb" data-name="${_esc(f.name)}" ${_localSel.has(f.name) ? 'checked' : ''} onchange="toggleLocalRow(this)"></td>
+      <td><input type="checkbox" class="cb local-row-cb" data-name="${_esc(f.name)}" ${(_localSelectAll || _localSel.has(f.name)) ? 'checked' : ''} onchange="toggleLocalRow(this)"></td>
       <td>
         <div class="row-name">
           <span class="row-icon" aria-hidden="true">
@@ -592,6 +638,13 @@ function _renderPagi() {
   document.getElementById('btn-prev').disabled = _page <= 1;
   document.getElementById('btn-next').disabled = _page >= pages;
 }
+function _renderAssetPagi() {
+  const pages = Math.max(1, Math.ceil(_assetData.length / _assetPageSize));
+  const current = _assetData.length ? _assetPage : 0;
+  document.getElementById('asset-pagi-page').textContent = tr('cache.pageIndicator', { current, total: pages }, `第 ${current} / ${pages} 页`);
+  document.getElementById('btn-asset-prev').disabled = _assetPage <= 1;
+  document.getElementById('btn-asset-next').disabled = _assetPage >= pages;
+}
 
 function prevPage() {
   if (_page > 1) {
@@ -607,6 +660,21 @@ function nextPage() {
     loadList();
   }
 }
+function prevAssetPage() {
+  if (_assetPage > 1) {
+    _assetPage -= 1;
+    _renderAssets();
+    _renderAssetPagi();
+  }
+}
+function nextAssetPage() {
+  const pages = Math.max(1, Math.ceil(_assetData.length / _assetPageSize));
+  if (_assetPage < pages) {
+    _assetPage += 1;
+    _renderAssets();
+    _renderAssetPagi();
+  }
+}
 
 function changePageSize(value) {
   const next = Number(value);
@@ -614,6 +682,14 @@ function changePageSize(value) {
   localStorage.setItem(PAGE_SIZE_KEY, String(_pageSize));
   _page = 1;
   loadList();
+}
+function changeAssetPageSize(value) {
+  const next = Number(value);
+  _assetPageSize = PAGE_SIZE_OPTIONS.includes(next) ? next : 100;
+  localStorage.setItem(ASSET_PAGE_SIZE_KEY, String(_assetPageSize));
+  _assetPage = 1;
+  _renderAssets();
+  _renderAssetPagi();
 }
 
 function switchView(view) {
@@ -626,6 +702,7 @@ function switchView(view) {
   document.getElementById('panel-online').classList.toggle('active', isOnline);
   if (isOnline) {
     clearLocalSelection(false);
+    _renderAssetPagi();
     return;
   }
   clearAssetSelection(false);
@@ -688,17 +765,21 @@ async function loadAssets() {
     _assetLoaded = true;
     _assetData = d.tokens || [];
     _assetTotal = d.total_assets ?? _assetData.reduce((sum, row) => sum + (row.count || 0), 0);
+    _assetPage = 1;
     _expanded = {};
     _reconcileAssetSelection();
     _renderAssets();
+    _renderAssetPagi();
     updateAssetSummary();
   } catch (e) {
     _assetLoaded = false;
     _assetData = [];
     _assetTotal = 0;
+    _assetPage = 1;
     _expanded = {};
     _assetSel.clear();
     _renderAssets();
+    _renderAssetPagi();
     updateAssetSummary();
     showToast(tr('cache.loadFailed', { message: e.message }, `加载失败: ${e.message}`), 'error');
   } finally {
@@ -709,6 +790,8 @@ async function loadAssets() {
 
 function _renderAssets() {
   const tbody = document.getElementById('assets-tbody');
+  if (!_assetData.length && _assetSelectAll) _assetSelectAll = false;
+  _renderAssetPagi();
   syncAssetSelectAll();
   if (!_assetLoaded) {
     tbody.innerHTML = `<tr><td colspan="5" class="table-empty">${_esc(tr('cache.emptyAssetsIdle', null, '点击右上角获取在线资产列表'))}</td></tr>`;
@@ -726,12 +809,12 @@ function _renderAssets() {
   const naLabel = tr('cache.na', null, '—');
 
   const rows = [];
-  for (const row of _assetData) {
+  for (const row of pagedAssetRows()) {
     const isOpen = !!_expanded[row.masked];
     const hasItems = row.count > 0;
     rows.push(`
       <tr>
-        <td><input type="checkbox" class="cb asset-row-cb" data-token="${_esc(row.token)}" ${_assetSel.has(row.token) ? 'checked' : ''} onchange="toggleAssetRow(this)"></td>
+        <td><input type="checkbox" class="cb asset-row-cb" data-token="${_esc(row.token)}" ${(_assetSelectAll || _assetSel.has(row.token)) ? 'checked' : ''} onchange="toggleAssetRow(this)"></td>
         <td style="padding:10px 8px 10px 14px">
           ${hasItems ? `<button class="expand-btn${isOpen ? ' open' : ''}" onclick="toggleExpand('${_esc(row.masked)}')" title="${_esc(isOpen ? collapseLabel : expandLabel)}">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
@@ -816,6 +899,7 @@ async function deleteAssetItem(token, masked, assetId) {
 }
 
 function _reconcileLocalSelection() {
+  if (_localSelectAll) return;
   const names = new Set(_localItems.map((item) => item.name));
   [..._localSel].forEach((name) => {
     if (!names.has(name)) _localSel.delete(name);
@@ -830,16 +914,21 @@ function syncLocalSelectAll() {
     cbAll.indeterminate = false;
     return;
   }
-  const selected = _localItems.filter((item) => _localSel.has(item.name)).length;
+  const selected = _localSelectAll ? _localItems.length : _localItems.filter((item) => _localSel.has(item.name)).length;
   cbAll.checked = selected === _localItems.length;
   cbAll.indeterminate = selected > 0 && selected < _localItems.length;
 }
 
 function toggleAllLocal(checked) {
-  _localItems.forEach((item) => {
-    if (checked) _localSel.add(item.name);
-    else _localSel.delete(item.name);
-  });
+  if (_localSelectAll && !checked) {
+    _localSelectAll = false;
+    _localSel.clear();
+  } else {
+    _localItems.forEach((item) => {
+      if (checked) _localSel.add(item.name);
+      else _localSel.delete(item.name);
+    });
+  }
   document.querySelectorAll('.local-row-cb').forEach((el) => { el.checked = checked; });
   syncLocalSelectAll();
   updateLocalBatchButtons();
@@ -848,6 +937,11 @@ function toggleAllLocal(checked) {
 function toggleLocalRow(el) {
   const name = el.dataset.name;
   if (!name) return;
+  if (_localSelectAll) {
+    _localSelectAll = false;
+    _localSel.clear();
+    _localItems.forEach((item) => _localSel.add(item.name));
+  }
   if (el.checked) _localSel.add(name);
   else _localSel.delete(name);
   syncLocalSelectAll();
@@ -855,6 +949,7 @@ function toggleLocalRow(el) {
 }
 
 function clearLocalSelection(render = true) {
+  _localSelectAll = false;
   _localSel.clear();
   syncLocalSelectAll();
   updateLocalBatchButtons();
@@ -864,15 +959,42 @@ function clearLocalSelection(render = true) {
 }
 
 function updateLocalBatchButtons() {
-  const show = _localSel.size > 0;
+  const show = _localSelectAll || _localSel.size > 0;
   const btnDelete = document.getElementById('btn-local-delete-selected');
   const btnClear = document.getElementById('btn-clear');
+  const btnSelectAll = document.getElementById('btn-local-select-all');
   if (btnDelete) btnDelete.style.display = show ? '' : 'none';
   if (btnClear) btnClear.style.display = show ? 'none' : '';
+  if (btnSelectAll) btnSelectAll.classList.toggle('is-active', _localSelectAll);
+}
+function toggleSelectAllLocal() {
+  if (_localSelectAll) {
+    clearLocalSelection();
+  } else if (_total > 0) {
+    _localSelectAll = true;
+    _localSel.clear();
+    _renderTable(_localItems);
+    updateLocalBatchButtons();
+  }
+}
+async function fetchAllLocalNames() {
+  const names = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const d = await _api('GET', `/cache/list?type=${encodeURIComponent(_type)}&page=${page}&page_size=1000`);
+    const items = Array.isArray(d.items) ? d.items : [];
+    items.forEach((item) => { if (item?.name) names.push(item.name); });
+    totalPages = Math.max(1, Math.ceil(Number(d.total || 0) / 1000));
+    page += 1;
+  } while (page <= totalPages);
+  return names;
 }
 
 async function deleteSelectedLocal() {
-  const names = _localItems.filter((item) => _localSel.has(item.name)).map((item) => item.name);
+  const names = _localSelectAll
+    ? await fetchAllLocalNames()
+    : _localItems.filter((item) => _localSel.has(item.name)).map((item) => item.name);
   if (!names.length) return;
   if (!confirm(tr('cache.deleteSelectedConfirm', { n: names.length }, `确定要删除选中的 ${names.length} 个文件吗？`))) return;
   try {
@@ -888,30 +1010,45 @@ async function deleteSelectedLocal() {
 }
 
 function _reconcileAssetSelection() {
+  if (_assetSelectAll) return;
   const tokens = new Set(_assetData.map((row) => row.token));
   [..._assetSel].forEach((token) => {
     if (!tokens.has(token)) _assetSel.delete(token);
   });
 }
 
+function pagedAssetRows() {
+  const totalPages = Math.max(1, Math.ceil(_assetData.length / _assetPageSize));
+  if (_assetPage > totalPages) _assetPage = totalPages;
+  const start = (_assetPage - 1) * _assetPageSize;
+  return _assetData.slice(start, start + _assetPageSize);
+}
+
 function syncAssetSelectAll() {
   const cbAll = document.getElementById('cb-asset-all');
   if (!cbAll) return;
-  if (!_assetData.length) {
+  const rows = pagedAssetRows();
+  if (!rows.length) {
     cbAll.checked = false;
     cbAll.indeterminate = false;
     return;
   }
-  const selected = _assetData.filter((row) => _assetSel.has(row.token)).length;
-  cbAll.checked = selected === _assetData.length;
-  cbAll.indeterminate = selected > 0 && selected < _assetData.length;
+  const selected = _assetSelectAll ? rows.length : rows.filter((row) => _assetSel.has(row.token)).length;
+  cbAll.checked = selected === rows.length;
+  cbAll.indeterminate = selected > 0 && selected < rows.length;
 }
 
 function toggleAllAssets(checked) {
-  _assetData.forEach((row) => {
-    if (checked) _assetSel.add(row.token);
-    else _assetSel.delete(row.token);
-  });
+  const rows = pagedAssetRows();
+  if (_assetSelectAll && !checked) {
+    _assetSelectAll = false;
+    _assetSel.clear();
+  } else {
+    rows.forEach((row) => {
+      if (checked) _assetSel.add(row.token);
+      else _assetSel.delete(row.token);
+    });
+  }
   document.querySelectorAll('.asset-row-cb').forEach((el) => { el.checked = checked; });
   syncAssetSelectAll();
   updateAssetBatchButtons();
@@ -920,6 +1057,11 @@ function toggleAllAssets(checked) {
 function toggleAssetRow(el) {
   const token = el.dataset.token;
   if (!token) return;
+  if (_assetSelectAll) {
+    _assetSelectAll = false;
+    _assetSel.clear();
+    pagedAssetRows().forEach((row) => _assetSel.add(row.token));
+  }
   if (el.checked) _assetSel.add(token);
   else _assetSel.delete(token);
   syncAssetSelectAll();
@@ -927,6 +1069,7 @@ function toggleAssetRow(el) {
 }
 
 function clearAssetSelection(render = true) {
+  _assetSelectAll = false;
   _assetSel.clear();
   syncAssetSelectAll();
   updateAssetBatchButtons();
@@ -936,16 +1079,31 @@ function clearAssetSelection(render = true) {
 }
 
 function updateAssetBatchButtons() {
-  const selected = _assetData.filter((row) => _assetSel.has(row.token) && row.count > 0).length;
+  const selected = _assetSelectAll
+    ? _assetData.filter((row) => row.count > 0).length
+    : _assetData.filter((row) => _assetSel.has(row.token) && row.count > 0).length;
   const btnClearAll = document.getElementById('btn-clear-all-assets');
   const btnClearSelected = document.getElementById('btn-clear-selected-assets');
-  const showSelection = _assetSel.size > 0;
+  const btnSelectAll = document.getElementById('btn-asset-select-all');
+  const showSelection = _assetSelectAll || _assetSel.size > 0;
   if (btnClearSelected) btnClearSelected.style.display = selected > 0 ? '' : 'none';
   if (btnClearAll) btnClearAll.style.display = !showSelection && _assetData.some((row) => row.count > 0) ? '' : 'none';
+  if (btnSelectAll) btnSelectAll.classList.toggle('is-active', _assetSelectAll);
+}
+function toggleSelectAllAssets() {
+  if (_assetSelectAll) {
+    clearAssetSelection();
+  } else if (_assetData.length > 0) {
+    _assetSelectAll = true;
+    _assetSel.clear();
+    _renderAssets();
+  }
 }
 
 async function clearSelectedAssets() {
-  const tokens = _assetData.filter((row) => _assetSel.has(row.token) && row.count > 0).map((row) => row.token);
+  const tokens = _assetSelectAll
+    ? _assetData.filter((row) => row.count > 0).map((row) => row.token)
+    : _assetData.filter((row) => _assetSel.has(row.token) && row.count > 0).map((row) => row.token);
   if (!tokens.length) return;
   await runAssetClear(tokens);
 }
