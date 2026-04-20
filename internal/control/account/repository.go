@@ -509,7 +509,13 @@ func escapeLike(value string) string {
 func quotaRemainingExpr(storageType, column string) string {
 	switch storageType {
 	case "mysql":
-		return fmt.Sprintf(`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(%s, '$.remaining')), '0') AS UNSIGNED)`, column)
+		return fmt.Sprintf(
+			`CAST(CASE WHEN %s IS NULL OR %s = '' OR JSON_VALID(%s) = 0 THEN '0' ELSE COALESCE(JSON_UNQUOTE(JSON_EXTRACT(%s, '$.remaining')), '0') END AS UNSIGNED)`,
+			column,
+			column,
+			column,
+			column,
+		)
 	default:
 		return fmt.Sprintf(`CAST(COALESCE(json_extract(%s, '$.remaining'), 0) AS INTEGER)`, column)
 	}
