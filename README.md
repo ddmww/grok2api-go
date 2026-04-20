@@ -55,6 +55,12 @@ docker compose --profile mysql up --build -d
 docker pull ghcr.io/ddmww/grok2api-go:latest
 ```
 
+Docker Hub 镜像：
+
+```bash
+docker pull ddmww/grok2api-go:latest
+```
+
 ## 迁移
 
 - `ACCOUNT_STORAGE=mysql` 且目标库为空时，会自动尝试导入 `${ACCOUNT_LOCAL_PATH}` 指向的本地 SQLite
@@ -64,4 +70,4 @@ docker pull ghcr.io/ddmww/grok2api-go:latest
 ## CI / CD
 
 - `ci.yml`：`go test`、`go build`、`docker build`
-- `docker-publish.yml`：`main` 分支自动更新 `ghcr.io/ddmww/grok2api-go:latest`，版本 tag 同时发布对应版本号镜像与多架构清单
+- `docker-publish.yml`：`main` 分支自动更新 GHCR `latest`；若仓库配置了 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN` secrets，则同时发布 Docker Hub 的 `ddmww/grok2api-go`
