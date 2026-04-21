@@ -237,6 +237,12 @@ func streamMessages(c *gin.Context, state *app.State, spec model.Spec, request m
 }
 
 func runMessages(ctx context.Context, state *app.State, spec model.Spec, request messagesRequest) (runResult, error) {
+	timeoutSec := state.Config.GetInt("chat.timeout", 60)
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+	}
 	messages := parseAnthropicMessages(request.Messages, request.System)
 	message := flattenMessages(messages)
 	toolNames := []string{}
@@ -250,6 +256,11 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 	excluded := map[string]struct{}{}
 	inputTokens := tokens.EstimateTextByModel(spec.Name, message)
 	var lastRetryErr error
+	session, err := state.XAI.NewChatSession()
+	if err != nil {
+		return runResult{}, err
+	}
+	defer session.Close()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := state.Runtime.ReserveWithExclude(spec, excluded)
@@ -259,7 +270,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 			}
 			return runResult{}, err
 		}
-		lines, errCh := state.XAI.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
+		lines, errCh := session.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
 		result := runResult{inputTokens: inputTokens}
 		adapter := xai.NewStreamAdapter(state.Config)
 		for line := range lines {
@@ -285,6 +296,9 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 			if stop {
 				break
 			}
+		}
+		if trailing := adapter.FinalizeThinking(); trailing != "" {
+			result.reasoning += trailing
 		}
 		if err := <-errCh; err != nil {
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForAnthropic(err))

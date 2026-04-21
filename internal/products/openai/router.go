@@ -163,7 +163,7 @@ func Mount(router *gin.Engine, state *app.State) {
 					writeOpenAIError(c, err)
 					return
 				}
-				c.JSON(http.StatusOK, videoChatResponse(spec, result))
+				c.JSON(http.StatusOK, videoChatResponse(state, spec, result))
 				return
 			}
 			if request.Stream {
@@ -182,6 +182,9 @@ func Mount(router *gin.Engine, state *app.State) {
 			if len(result.toolCalls) > 0 {
 				c.JSON(http.StatusOK, chatToolResponse(spec.Name, result.toolCalls, request.Messages, result.usage))
 				return
+			}
+			if !state.Config.GetBool("features.thinking", true) {
+				result.reasoning = ""
 			}
 			response := chatResponse(spec.Name, result.content, result.reasoning, request.Messages, result.usage)
 			if choices, ok := response["choices"].([]map[string]any); ok && len(choices) > 0 {
@@ -538,7 +541,7 @@ func refreshQuotaAsync(state *app.State, token string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = state.Refresh.RefreshTokens(ctx, []string{token})
+		_, _ = state.Refresh.RefreshOnDemand(ctx)
 	}()
 }
 
@@ -609,11 +612,22 @@ func prepareMessage(messages []map[string]any, tools []map[string]any, toolChoic
 }
 
 func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) (streamResult, error) {
+	timeoutSec := state.Config.GetInt("chat.timeout", 60)
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+	}
 	message, toolNames := prepareMessage(messages, tools, toolChoice)
 	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
 	var lastRetryErr error
+	session, err := state.XAI.NewChatSession()
+	if err != nil {
+		return streamResult{}, err
+	}
+	defer session.Close()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := reserveLease(state, spec, excluded)
@@ -624,7 +638,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			return streamResult{}, err
 		}
 
-		lines, errCh := state.XAI.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
+		lines, errCh := session.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
 		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
 		for line := range lines {
@@ -650,6 +664,9 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			if stop {
 				break
 			}
+		}
+		if trailing := adapter.FinalizeThinking(); trailing != "" {
+			result.reasoning += trailing
 		}
 
 		if err := <-errCh; err != nil {
@@ -943,6 +960,9 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			if stop {
 				break
 			}
+		}
+		if trailing := adapter.FinalizeThinking(); trailing != "" {
+			result.reasoning += trailing
 		}
 
 		if err := <-errCh; err != nil {

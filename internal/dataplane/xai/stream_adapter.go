@@ -18,6 +18,7 @@ type FrameEvent struct {
 
 type StreamAdapter struct {
 	cfg               *config.Service
+	summaryMode       bool
 	cardCache         map[string]map[string]any
 	citationOrder     []string
 	citationMap       map[string]int
@@ -32,6 +33,8 @@ type StreamAdapter struct {
 	ImageURLs         []ImageRef
 	FinalMessage      string
 	streamErrors      []string
+	contentStarted    bool
+	summary           thinkingSummary
 }
 
 type pendingCitation struct {
@@ -53,6 +56,7 @@ var (
 func NewStreamAdapter(cfg *config.Service) *StreamAdapter {
 	return &StreamAdapter{
 		cfg:               cfg,
+		summaryMode:       cfg != nil && cfg.GetBool("features.thinking_summary", false),
 		cardCache:         map[string]map[string]any{},
 		citationMap:       map[string]int{},
 		lastCitationIndex: -1,
@@ -100,9 +104,11 @@ func (a *StreamAdapter) Feed(data string) []FrameEvent {
 	a.collectSearchSources(response)
 
 	if response["finalMetadata"] != nil {
+		events = append(events, a.flushThinkingEvents()...)
 		return append(events, FrameEvent{Kind: "soft_stop"})
 	}
 	if isSoftStop, _ := response["isSoftStop"].(bool); isSoftStop {
+		events = append(events, a.flushThinkingEvents()...)
 		return append(events, FrameEvent{Kind: "soft_stop"})
 	}
 
@@ -111,12 +117,18 @@ func (a *StreamAdapter) Feed(data string) []FrameEvent {
 		return events
 	}
 	if isThinking, _ := response["isThinking"].(bool); isThinking {
+		if a.summaryMode {
+			a.summary.Add(token)
+			return events
+		}
 		a.ThinkingBuf = append(a.ThinkingBuf, token)
 		return append(events, FrameEvent{Kind: "thinking", Content: token})
 	}
+	events = append(events, a.flushThinkingEvents()...)
 
 	cleaned, localAnnotations := a.cleanToken(token)
 	if cleaned != "" {
+		a.contentStarted = true
 		a.TextBuf = append(a.TextBuf, cleaned)
 		for _, ann := range localAnnotations {
 			start, _ := ann["local_start"].(int)
@@ -453,6 +465,29 @@ func (a *StreamAdapter) FinalError() string {
 		return ""
 	}
 	return strings.TrimSpace(a.streamErrors[0])
+}
+
+func (a *StreamAdapter) FinalizeThinking() string {
+	if !a.summaryMode {
+		return ""
+	}
+	text := strings.TrimSpace(a.summary.Flush())
+	if text == "" {
+		return ""
+	}
+	a.ThinkingBuf = append(a.ThinkingBuf, text)
+	return text
+}
+
+func (a *StreamAdapter) flushThinkingEvents() []FrameEvent {
+	if !a.summaryMode {
+		return nil
+	}
+	text := strings.TrimSpace(a.FinalizeThinking())
+	if text == "" {
+		return nil
+	}
+	return []FrameEvent{{Kind: "thinking", Content: text}}
 }
 
 func normalizeWhitespace(value string) string {

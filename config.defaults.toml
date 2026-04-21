@@ -6,10 +6,6 @@ app_key = "grok2api"
 app_url = ""
 # API 调用密钥
 api_key = ""
-# 启用 WebUI
-webui_enabled = false
-# WebUI 访问密码
-webui_key = ""
 
 
 # ==================== 日志配置 ====================

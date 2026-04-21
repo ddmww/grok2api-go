@@ -236,15 +236,12 @@ func Mount(router *gin.Engine, state *app.State) {
 				inserted += result.Upserted
 			}
 			if syncAutoDetect {
-				refreshed := 0
-				for _, chunk := range chunkStrings(newTokens, tokenImportBatchSize) {
-					refreshResult, refreshErr := state.Refresh.RefreshTokens(c.Request.Context(), chunk)
-					if refreshErr != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"message": refreshErr.Error()})
-						return
-					}
-					refreshed += refreshResult.Refreshed
+				refreshResult, refreshErr := state.Refresh.RefreshTokens(c.Request.Context(), newTokens)
+				if refreshErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"message": refreshErr.Error()})
+					return
 				}
+				refreshed := refreshResult.Refreshed
 				if refreshed != len(newTokens) {
 					c.JSON(http.StatusInternalServerError, gin.H{
 						"message": fmt.Sprintf("auto-detect refresh incomplete: refreshed %d of %d tokens", refreshed, len(newTokens)),
@@ -256,6 +253,63 @@ func Mount(router *gin.Engine, state *app.State) {
 			}
 			_ = state.Runtime.Sync(c.Request.Context())
 			c.JSON(http.StatusOK, gin.H{"status": "success", "count": inserted, "skipped": len(cleaned) - len(newTokens), "synced": syncAutoDetect})
+		})
+
+		api.POST("/tokens/export", func(c *gin.Context) {
+			var payload struct {
+				Format string `json:"format"`
+				batchSelectionPayload
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+			format := strings.ToLower(strings.TrimSpace(payload.Format))
+			if format == "" {
+				format = "txt"
+			}
+			if format != "txt" && format != "json" {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "format must be txt or json"})
+				return
+			}
+
+			records, err := resolveExportSelection(c.Request.Context(), state.Repo, payload.batchSelectionPayload)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+				return
+			}
+			if len(records) == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "No tokens provided"})
+				return
+			}
+
+			filename := fmt.Sprintf("tokens-%s.%s", exportSuffix(payload.Filters.Pool, payload.Filters.Status, payload.Filters.NSFW), format)
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+			if format == "json" {
+				grouped := map[string][]map[string]any{}
+				for _, record := range records {
+					pool := account.NormalizePool(record.Pool)
+					grouped[pool] = append(grouped[pool], map[string]any{
+						"token": record.Token,
+						"tags":  record.Tags,
+					})
+				}
+				c.Header("Content-Type", "application/json; charset=utf-8")
+				c.JSON(http.StatusOK, grouped)
+				return
+			}
+
+			lines := make([]string, 0, len(records))
+			for _, record := range records {
+				if strings.TrimSpace(record.Token) != "" {
+					lines = append(lines, record.Token)
+				}
+			}
+			content := strings.Join(lines, "\n")
+			if content != "" {
+				content += "\n"
+			}
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(content))
 		})
 
 		api.DELETE("/tokens", func(c *gin.Context) {
@@ -949,24 +1003,12 @@ func parseBatchSelectionPayload(c *gin.Context) (batchSelectionPayload, error) {
 func resolveBatchSelection(ctx context.Context, repo account.Repository, payload batchSelectionPayload, fallbackManageable bool) ([]string, error) {
 	tokens := sanitizeTokens(payload.Tokens)
 	if payload.SelectAllFiltered {
-		pool := strings.TrimSpace(payload.Filters.Pool)
-		if strings.EqualFold(pool, "all") {
-			pool = ""
-		}
-		status := strings.TrimSpace(payload.Filters.Status)
-		if strings.EqualFold(status, "all") {
-			status = ""
-		}
-		nsfw := strings.TrimSpace(payload.Filters.NSFW)
-		if strings.EqualFold(nsfw, "all") {
-			nsfw = ""
-		}
 		return listTokensByQuery(ctx, repo, account.ListQuery{
 			Page:           1,
 			PageSize:       2000,
-			Pool:           pool,
-			Status:         account.Status(status),
-			NSFW:           nsfw,
+			Pool:           normalizeBatchFilterValue(payload.Filters.Pool),
+			Status:         account.Status(normalizeBatchFilterValue(payload.Filters.Status)),
+			NSFW:           normalizeBatchFilterValue(payload.Filters.NSFW),
 			IncludeDeleted: false,
 			SortBy:         "created_at",
 			SortDesc:       true,
@@ -979,6 +1021,89 @@ func resolveBatchSelection(ctx context.Context, repo account.Repository, payload
 		return listManageableTokens(ctx, repo)
 	}
 	return nil, nil
+}
+
+func resolveExportSelection(ctx context.Context, repo account.Repository, payload batchSelectionPayload) ([]account.Record, error) {
+	if payload.SelectAllFiltered {
+		return listRecordsByQuery(ctx, repo, account.ListQuery{
+			Page:           1,
+			PageSize:       1000,
+			Pool:           normalizeBatchFilterValue(payload.Filters.Pool),
+			Status:         account.Status(normalizeBatchFilterValue(payload.Filters.Status)),
+			NSFW:           normalizeBatchFilterValue(payload.Filters.NSFW),
+			IncludeDeleted: false,
+			SortBy:         "created_at",
+			SortDesc:       true,
+		})
+	}
+
+	tokens := sanitizeTokens(payload.Tokens)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	records, err := repo.GetAccounts(ctx, tokens)
+	if err != nil {
+		return nil, err
+	}
+	byToken := make(map[string]account.Record, len(records))
+	for _, record := range records {
+		if !record.IsDeleted() {
+			byToken[record.Token] = record
+		}
+	}
+	ordered := make([]account.Record, 0, len(tokens))
+	for _, token := range tokens {
+		if record, ok := byToken[token]; ok {
+			ordered = append(ordered, record)
+		}
+	}
+	return ordered, nil
+}
+
+func listRecordsByQuery(ctx context.Context, repo account.Repository, query account.ListQuery) ([]account.Record, error) {
+	pageNum := 1
+	records := make([]account.Record, 0, 128)
+	for {
+		query.Page = pageNum
+		page, err := repo.ListAccounts(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range page.Items {
+			if !record.IsDeleted() {
+				records = append(records, record)
+			}
+		}
+		if int64(pageNum*query.PageSize) >= page.Total || len(page.Items) == 0 {
+			break
+		}
+		pageNum++
+	}
+	return records, nil
+}
+
+func normalizeBatchFilterValue(value string) string {
+	normalized := strings.TrimSpace(value)
+	if strings.EqualFold(normalized, "all") {
+		return ""
+	}
+	return normalized
+}
+
+func exportSuffix(pool, status, nsfw string) string {
+	parts := []string{
+		defaultIfEmpty(normalizeBatchFilterValue(status), "all"),
+		defaultIfEmpty(normalizeBatchFilterValue(nsfw), "all"),
+		defaultIfEmpty(normalizeBatchFilterValue(pool), "all"),
+	}
+	return strings.Join(parts, "-")
+}
+
+func defaultIfEmpty(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func listTokensByQuery(ctx context.Context, repo account.Repository, query account.ListQuery, onlyManageable bool) ([]string, error) {
@@ -1047,13 +1172,32 @@ func runBatchWithRecorder(ctx context.Context, state *app.State, kind string, en
 	type batchItemResult struct {
 		token string
 		item  map[string]any
+		patch *account.Patch
 		err   error
 	}
 	results := platformbatch.Run(tokens, concurrency, func(token string) batchItemResult {
-		item, err := executeBatchItem(ctx, state, kind, enabled, token)
-		return batchItemResult{token: token, item: item, err: err}
+		item, patch, err := executeBatchItem(ctx, state, kind, enabled, token)
+		return batchItemResult{token: token, item: item, patch: patch, err: err}
 	})
+	patches := make([]account.Patch, 0, len(results))
 	out := batchResult{items: map[string]any{}}
+	for _, result := range results {
+		if result.patch != nil && result.err == nil {
+			patches = append(patches, *result.patch)
+		}
+	}
+	if len(patches) > 0 {
+		if _, err := state.Repo.PatchAccounts(ctx, patches); err != nil {
+			for index := range results {
+				if results[index].patch != nil && results[index].err == nil {
+					results[index].err = err
+					results[index].item = nil
+				}
+			}
+		} else {
+			_ = state.Runtime.Sync(ctx)
+		}
+	}
 	for _, result := range results {
 		if result.err != nil {
 			out.fail++
@@ -1069,38 +1213,37 @@ func runBatchWithRecorder(ctx context.Context, state *app.State, kind string, en
 	return out
 }
 
-func executeBatchItem(ctx context.Context, state *app.State, kind string, enabled bool, token string) (map[string]any, error) {
+func executeBatchItem(ctx context.Context, state *app.State, kind string, enabled bool, token string) (map[string]any, *account.Patch, error) {
 	switch kind {
 	case "refresh":
 		result, err := state.Refresh.RefreshTokens(ctx, []string{token})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if result.Refreshed == 0 {
-			return nil, errors.New("未获取到真实配额数据")
+			return nil, nil, errors.New("未获取到真实配额数据")
 		}
-		return map[string]any{"refreshed": result.Refreshed}, nil
+		return map[string]any{"refreshed": result.Refreshed}, nil, nil
 	case "nsfw":
 		if enabled {
 			if err := state.XAI.SetBirthDate(ctx, token); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if err := state.XAI.SetNSFW(ctx, token, enabled); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		addTags := []string{"nsfw"}
 		removeTags := []string{}
 		if !enabled {
 			addTags, removeTags = nil, []string{"nsfw"}
 		}
-		_, _ = state.Repo.PatchAccounts(ctx, []account.Patch{{Token: token, AddTags: addTags, RemoveTags: removeTags}})
-		_ = state.Runtime.Sync(ctx)
-		return map[string]any{"success": true, "tagged": enabled}, nil
+		patch := &account.Patch{Token: token, AddTags: addTags, RemoveTags: removeTags}
+		return map[string]any{"success": true, "tagged": enabled}, patch, nil
 	case "cache-clear":
 		items, err := state.XAI.ListAssets(ctx, token)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		deleted := 0
 		for _, item := range items {
@@ -1115,9 +1258,9 @@ func executeBatchItem(ctx context.Context, state *app.State, kind string, enable
 				deleted++
 			}
 		}
-		return map[string]any{"deleted": deleted}, nil
+		return map[string]any{"deleted": deleted}, nil, nil
 	default:
-		return nil, errors.New("unsupported batch operation")
+		return nil, nil, errors.New("unsupported batch operation")
 	}
 }
 

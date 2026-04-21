@@ -18,7 +18,7 @@ func TestBuildSSOCookie(t *testing.T) {
 		},
 	})
 
-	cookie := buildSSOCookie(cfg, "  sso=abc123 \u200b ")
+	cookie := buildSSOCookie(cfg, "  sso=abc123 \u200b ", nil)
 	if !strings.HasPrefix(cookie, "sso=abc123; sso-rw=abc123") {
 		t.Fatalf("unexpected sso cookie: %s", cookie)
 	}
@@ -38,7 +38,7 @@ func TestBuildRequestHeadersChromiumProfile(t *testing.T) {
 		},
 	})
 
-	headers := buildRequestHeaders(cfg, "sso=abc123", "application/json", "https://grok.com", "https://grok.com/")
+	headers := buildRequestHeaders(cfg, "sso=abc123", "application/json", "https://grok.com", "https://grok.com/", nil)
 	if got := headers.Get("Baggage"); got != defaultBaggage {
 		t.Fatalf("unexpected baggage header: %s", got)
 	}

@@ -12,12 +12,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/ddmww/grok2api-go/internal/control/account"
 	"github.com/ddmww/grok2api-go/internal/control/proxy"
 	"github.com/ddmww/grok2api-go/internal/platform/config"
-	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -26,8 +27,21 @@ const (
 )
 
 type Client struct {
-	cfg   *config.Service
-	proxy *proxy.Runtime
+	cfg        *config.Service
+	proxy      *proxy.Runtime
+	uploadOnce sync.Once
+	uploadSem  chan struct{}
+	listOnce   sync.Once
+	listSem    chan struct{}
+	deleteOnce sync.Once
+	deleteSem  chan struct{}
+}
+
+type ChatSession struct {
+	parent   *Client
+	proxyURL string
+	mu       sync.Mutex
+	client   *http.Client
 }
 
 type UpstreamError struct {
@@ -68,6 +82,68 @@ func NewClient(cfg *config.Service, proxyRuntime *proxy.Runtime) *Client {
 	return &Client{cfg: cfg, proxy: proxyRuntime}
 }
 
+func (c *Client) acquireUpload(ctx context.Context) (func(), error) {
+	return acquireSemaphore(ctx, c.uploadSemaphore())
+}
+
+func (c *Client) acquireList(ctx context.Context) (func(), error) {
+	return acquireSemaphore(ctx, c.listSemaphore())
+}
+
+func (c *Client) acquireDelete(ctx context.Context) (func(), error) {
+	return acquireSemaphore(ctx, c.deleteSemaphore())
+}
+
+func (c *Client) uploadSemaphore() chan struct{} {
+	c.uploadOnce.Do(func() {
+		size := c.cfg.GetInt("batch.asset_upload_concurrency", 8)
+		if size <= 0 {
+			size = 8
+		}
+		c.uploadSem = make(chan struct{}, size)
+	})
+	return c.uploadSem
+}
+
+func (c *Client) listSemaphore() chan struct{} {
+	c.listOnce.Do(func() {
+		size := c.cfg.GetInt("batch.asset_list_concurrency", 8)
+		if size <= 0 {
+			size = 8
+		}
+		c.listSem = make(chan struct{}, size)
+	})
+	return c.listSem
+}
+
+func (c *Client) deleteSemaphore() chan struct{} {
+	c.deleteOnce.Do(func() {
+		size := c.cfg.GetInt("batch.asset_delete_concurrency", 8)
+		if size <= 0 {
+			size = 8
+		}
+		c.deleteSem = make(chan struct{}, size)
+	})
+	return c.deleteSem
+}
+
+func acquireSemaphore(ctx context.Context, sem chan struct{}) (func(), error) {
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *Client) withConfigTimeout(ctx context.Context, path string, fallback int) (context.Context, context.CancelFunc) {
+	seconds := c.cfg.GetInt(path, fallback)
+	if seconds <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
+}
+
 func (c *Client) baseURL() string {
 	if c == nil || c.cfg == nil {
 		return defaultBaseURL
@@ -82,8 +158,9 @@ func (c *Client) endpoint(path string) string {
 	return c.baseURL() + path
 }
 
-func (c *Client) buildHeaders(token, contentType, origin, referer string) http.Header {
-	return buildRequestHeaders(c.cfg, token, contentType, origin, referer)
+func (c *Client) buildHeaders(proxyURL, token, contentType, origin, referer string) http.Header {
+	bundle, _ := c.proxy.Clearance(proxyURL)
+	return buildRequestHeaders(c.cfg, token, contentType, origin, referer, bundle)
 }
 
 func (c *Client) do(ctx context.Context, method, urlValue, token string, body []byte, resource bool) (*http.Response, error) {
@@ -95,7 +172,7 @@ func (c *Client) do(ctx context.Context, method, urlValue, token string, body []
 	if err != nil {
 		return nil, err
 	}
-	headers := c.buildHeaders(token, "application/json", "https://grok.com", "https://grok.com/")
+	headers := c.buildHeaders(proxyKey, token, "application/json", "https://grok.com", "https://grok.com/")
 	request.Header = headers
 	response, err := client.Do(request)
 	if err != nil {
@@ -168,14 +245,116 @@ func decodeResponseBody(resp *http.Response) error {
 }
 
 func (c *Client) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {
+	session, err := c.NewChatSession()
+	if err != nil {
+		out := make(chan string)
+		errCh := make(chan error, 1)
+		close(out)
+		errCh <- err
+		close(errCh)
+		return out, errCh
+	}
+	return session.ChatStream(ctx, token, payload)
+}
+
+func (c *Client) NewChatSession() (*ChatSession, error) {
+	proxyURL := strings.TrimSpace(c.proxy.ProxyURL(false))
+	client, err := c.newScopedHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return &ChatSession{
+		parent:   c,
+		proxyURL: proxyURL,
+		client:   client,
+	}, nil
+}
+
+func (c *Client) newScopedHTTPClient(proxyURL string) (*http.Client, error) {
+	transport, err := proxy.NewTransport(c.cfg, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
+func (s *ChatSession) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	client := s.client
+	s.client = nil
+	s.mu.Unlock()
+	closeHTTPClient(client)
+}
+
+func closeHTTPClient(client *http.Client) {
+	if client == nil {
+		return
+	}
+	if transport, ok := client.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
+	}
+}
+
+func (s *ChatSession) reset() error {
+	if s == nil || s.parent == nil {
+		return nil
+	}
+	client, err := s.parent.newScopedHTTPClient(s.proxyURL)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	old := s.client
+	s.client = client
+	s.mu.Unlock()
+	closeHTTPClient(old)
+	return nil
+}
+
+func (s *ChatSession) currentClient() *http.Client {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client
+}
+
+func (s *ChatSession) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {
 	out := make(chan string, 32)
 	errCh := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errCh)
 		data, _ := json.Marshal(payload)
-		resp, err := c.do(ctx, http.MethodPost, c.endpoint("/rest/app-chat/conversations/new"), token, data, false)
+		client := s.currentClient()
+		if client == nil {
+			errCh <- errors.New("chat session is closed")
+			return
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.parent.endpoint("/rest/app-chat/conversations/new"), bytes.NewReader(data))
 		if err != nil {
+			errCh <- err
+			return
+		}
+		request.Header = s.parent.buildHeaders(s.proxyURL, token, "application/json", "https://grok.com", "https://grok.com/")
+		resp, err := client.Do(request)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if isResettableStatus(s.parent.cfg, resp.StatusCode) {
+			if resetErr := s.reset(); resetErr != nil {
+				resp.Body.Close()
+				errCh <- resetErr
+				return
+			}
+		}
+		if err := decodeResponseBody(resp); err != nil {
+			resp.Body.Close()
 			errCh <- err
 			return
 		}
@@ -200,6 +379,115 @@ func (c *Client) ChatStream(ctx context.Context, token string, payload map[strin
 		}
 	}()
 	return out, errCh
+}
+
+func (s *ChatSession) postJSON(ctx context.Context, path, token string, payload map[string]any) (map[string]any, error) {
+	client := s.currentClient()
+	if client == nil {
+		return nil, errors.New("chat session is closed")
+	}
+	data, _ := json.Marshal(payload)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.parent.endpoint(path), bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	request.Header = s.parent.buildHeaders(s.proxyURL, token, "application/json", "https://grok.com", "https://grok.com/")
+	resp, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if isResettableStatus(s.parent.cfg, resp.StatusCode) {
+		if resetErr := s.reset(); resetErr != nil {
+			resp.Body.Close()
+			return nil, resetErr
+		}
+	}
+	if err := decodeResponseBody(resp); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	if len(body) == 0 {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *ChatSession) FetchQuotaProbe(ctx context.Context, token string) (account.QuotaWindow, error) {
+	body, err := s.postJSON(ctx, "/rest/rate-limits", token, map[string]any{"modelName": "auto"})
+	if err != nil {
+		return account.QuotaWindow{}, err
+	}
+	window, ok := parseQuotaResponse(body)
+	if !ok {
+		return account.QuotaWindow{}, errors.New("rate limits returned no quota data")
+	}
+	return window, nil
+}
+
+func (s *ChatSession) FetchDetailedQuotas(ctx context.Context, token, pool string, seed map[string]account.QuotaWindow) (map[string]account.QuotaWindow, error) {
+	out := map[string]account.QuotaWindow{}
+	for key, value := range seed {
+		out[key] = value
+	}
+	type quotaResult struct {
+		mode   string
+		window account.QuotaWindow
+		err    error
+	}
+	modes := account.SupportedModes(pool)
+	results := make(chan quotaResult, len(modes))
+	pending := 0
+	for _, mode := range modes {
+		if _, ok := out[mode]; ok {
+			continue
+		}
+		pending++
+		go func(mode string) {
+			body, err := s.postJSON(ctx, "/rest/rate-limits", token, map[string]any{"modelName": mode})
+			if err != nil {
+				results <- quotaResult{mode: mode, err: err}
+				return
+			}
+			window, ok := parseQuotaResponse(body)
+			if !ok {
+				results <- quotaResult{mode: mode, err: errors.New("rate limits returned no quota data")}
+				return
+			}
+			results <- quotaResult{mode: mode, window: window}
+		}(mode)
+	}
+
+	var lastErr error
+	for index := 0; index < pending; index++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-results:
+			if result.err != nil {
+				if lastErr == nil {
+					lastErr = result.err
+				}
+				continue
+			}
+			out[result.mode] = result.window
+		}
+	}
+	if len(out) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errors.New("rate limits returned no quota data")
+	}
+	return out, lastErr
 }
 
 func modePayload(mode string) []byte {
@@ -264,6 +552,8 @@ func (c *Client) FetchAllQuotas(ctx context.Context, token, pool string) (map[st
 }
 
 func (c *Client) SetBirthDate(ctx context.Context, token string) error {
+	ctx, cancel := c.withConfigTimeout(ctx, "nsfw.timeout", 60)
+	defer cancel()
 	payload := map[string]any{"birthDate": time.Now().AddDate(-25, 0, 0).UTC().Format("2006-01-02T15:04:05.000Z")}
 	data, _ := json.Marshal(payload)
 	resp, err := c.do(ctx, http.MethodPost, c.endpoint("/rest/auth/set-birth-date"), token, data, false)
@@ -279,6 +569,8 @@ func (c *Client) SetBirthDate(ctx context.Context, token string) error {
 }
 
 func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error {
+	ctx, cancel := c.withConfigTimeout(ctx, "nsfw.timeout", 60)
+	defer cancel()
 	value := byte(0)
 	if enabled {
 		value = 1
@@ -295,7 +587,7 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 	if err != nil {
 		return err
 	}
-	request.Header = c.buildHeaders(token, "application/grpc-web+proto", "https://grok.com", "https://grok.com/?_s=data")
+	request.Header = c.buildHeaders(proxyKey, token, "application/grpc-web+proto", "https://grok.com", "https://grok.com/?_s=data")
 	request.Header.Set("x-grpc-web", "1")
 	request.Header.Set("x-user-agent", "grpc-web-javascript/0.1")
 	resp, err := client.Do(request)
@@ -318,6 +610,14 @@ func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error 
 }
 
 func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "asset.list_timeout", 60)
+	defer cancel()
+	release, err := c.acquireList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	client, proxyKey, err := c.proxy.Client(true)
 	if err != nil {
 		return nil, err
@@ -326,7 +626,7 @@ func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any
 	if err != nil {
 		return nil, err
 	}
-	request.Header = c.buildHeaders(token, "application/json", "https://grok.com", "https://grok.com/")
+	request.Header = c.buildHeaders(proxyKey, token, "application/json", "https://grok.com", "https://grok.com/")
 	resp, err := client.Do(request)
 	if err != nil {
 		return nil, err
@@ -361,6 +661,14 @@ func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any
 }
 
 func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
+	ctx, cancel := c.withConfigTimeout(ctx, "asset.delete_timeout", 60)
+	defer cancel()
+	release, err := c.acquireDelete(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	client, proxyKey, err := c.proxy.Client(true)
 	if err != nil {
 		return err
@@ -369,7 +677,7 @@ func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
 	if err != nil {
 		return err
 	}
-	request.Header = c.buildHeaders(token, "application/json", "https://grok.com", "https://grok.com/")
+	request.Header = c.buildHeaders(proxyKey, token, "application/json", "https://grok.com", "https://grok.com/")
 	resp, err := client.Do(request)
 	if err != nil {
 		return err

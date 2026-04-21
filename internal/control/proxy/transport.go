@@ -63,6 +63,10 @@ func newTransport(cfg *config.Service, proxyValue string) (*http.Transport, erro
 	return transport, nil
 }
 
+func NewTransport(cfg *config.Service, proxyValue string) (*http.Transport, error) {
+	return newTransport(cfg, proxyValue)
+}
+
 func DialContext(cfg *config.Service, proxyValue string) (func(context.Context, string, string) (net.Conn, error), error) {
 	proxyURL := strings.TrimSpace(proxyValue)
 	if proxyURL == "" {

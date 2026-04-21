@@ -34,6 +34,12 @@ type videoConfig struct {
 	Preset         string `json:"preset"`
 }
 
+type preparedImageOutput struct {
+	APIURL    string
+	ChatValue string
+	B64JSON   string
+}
+
 type videoJob struct {
 	ID          string
 	Model       string
@@ -189,39 +195,180 @@ func inferVideoExtension(contentType, rawURL string) string {
 	}
 }
 
+func normalizeConfiguredImageFormat(state *app.State) string {
+	value := strings.ToLower(strings.TrimSpace(state.Config.GetString("features.image_format", "grok_url")))
+	switch value {
+	case "grok_url", "local_url", "grok_md", "local_md", "base64":
+		return value
+	default:
+		return "grok_url"
+	}
+}
+
+func normalizeConfiguredVideoFormat(state *app.State) string {
+	value := strings.ToLower(strings.TrimSpace(state.Config.GetString("features.video_format", "grok_url")))
+	switch value {
+	case "grok_url", "local_url", "grok_html", "local_html":
+		return value
+	default:
+		return "grok_url"
+	}
+}
+
+func markdownImage(urlValue string) string {
+	return fmt.Sprintf("![image](%s)", urlValue)
+}
+
+func htmlVideo(urlValue string) string {
+	safe := strings.ReplaceAll(urlValue, `"`, "&quot;")
+	return fmt.Sprintf(`<video controls src="%s"></video>`, safe)
+}
+
+func inferImageContentType(rawURL string) string {
+	extension := inferImageExtension("", rawURL)
+	if contentType := mime.TypeByExtension(extension); contentType != "" {
+		return contentType
+	}
+	return "image/jpeg"
+}
+
+func ensureLocalImageURL(ctx context.Context, state *app.State, token string, item xai.GeneratedImage) (string, error) {
+	if item.URL == "" {
+		return "", fmt.Errorf("empty image url")
+	}
+	fileID := fileIDFromURL(item.URL)
+	path, _ := localFilePath(paths.ImageCacheDir(), fileID)
+	if path != "" {
+		return localImageURL(state, fileID), nil
+	}
+	data, contentType, err := state.XAI.DownloadContent(ctx, token, item.URL)
+	if err != nil {
+		return "", err
+	}
+	extension := inferImageExtension(contentType, item.URL)
+	if _, err := saveBytes(paths.ImageCacheDir(), fileID, extension, data); err != nil {
+		return "", err
+	}
+	return localImageURL(state, fileID), nil
+}
+
+func imageDataURI(ctx context.Context, state *app.State, token string, item xai.GeneratedImage) (string, string, error) {
+	contentType := inferImageContentType(item.URL)
+	if strings.TrimSpace(item.BlobB64) != "" {
+		return item.BlobB64, contentType, nil
+	}
+	data, actualType, err := state.XAI.DownloadContent(ctx, token, item.URL)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(actualType) != "" {
+		contentType = actualType
+	}
+	return base64.StdEncoding.EncodeToString(data), contentType, nil
+}
+
+func prepareImageOutput(ctx context.Context, state *app.State, token string, item xai.GeneratedImage, responseFormat string) (preparedImageOutput, error) {
+	responseFormat = strings.ToLower(strings.TrimSpace(responseFormat))
+	if responseFormat == "b64_json" {
+		b64, _, err := imageDataURI(ctx, state, token, item)
+		if err != nil {
+			return preparedImageOutput{}, err
+		}
+		return preparedImageOutput{B64JSON: b64}, nil
+	}
+
+	configured := normalizeConfiguredImageFormat(state)
+	upstreamURL := item.URL
+	localURL := ""
+	getLocal := func() string {
+		if localURL != "" {
+			return localURL
+		}
+		urlValue, err := ensureLocalImageURL(ctx, state, token, item)
+		if err == nil {
+			localURL = urlValue
+		}
+		return localURL
+	}
+
+	switch configured {
+	case "local_url":
+		if urlValue := getLocal(); urlValue != "" {
+			return preparedImageOutput{APIURL: urlValue, ChatValue: urlValue}, nil
+		}
+		return preparedImageOutput{APIURL: upstreamURL, ChatValue: upstreamURL}, nil
+	case "grok_md":
+		return preparedImageOutput{APIURL: upstreamURL, ChatValue: markdownImage(upstreamURL)}, nil
+	case "local_md":
+		if urlValue := getLocal(); urlValue != "" {
+			return preparedImageOutput{APIURL: urlValue, ChatValue: markdownImage(urlValue)}, nil
+		}
+		return preparedImageOutput{APIURL: upstreamURL, ChatValue: markdownImage(upstreamURL)}, nil
+	case "base64":
+		b64, contentType, err := imageDataURI(ctx, state, token, item)
+		if err != nil {
+			return preparedImageOutput{APIURL: upstreamURL, ChatValue: markdownImage(upstreamURL)}, nil
+		}
+		dataURI := "data:" + contentType + ";base64," + b64
+		return preparedImageOutput{APIURL: dataURI, ChatValue: markdownImage(dataURI)}, nil
+	default:
+		return preparedImageOutput{APIURL: upstreamURL, ChatValue: upstreamURL}, nil
+	}
+}
+
+func ensureLocalVideoURL(ctx context.Context, state *app.State, token, rawURL string) string {
+	if strings.TrimSpace(rawURL) == "" {
+		return ""
+	}
+	fileID := fileIDFromURL(rawURL)
+	path, _ := localFilePath(paths.VideoCacheDir(), fileID)
+	if path != "" {
+		return localVideoURL(state, fileID)
+	}
+	data, contentType, err := state.XAI.DownloadContent(ctx, token, rawURL)
+	if err != nil {
+		return ""
+	}
+	extension := inferVideoExtension(contentType, rawURL)
+	if _, err := saveBytes(paths.VideoCacheDir(), fileID, extension, data); err != nil {
+		return ""
+	}
+	return localVideoURL(state, fileID)
+}
+
+func resolveVideoLink(ctx context.Context, state *app.State, token, rawURL string) string {
+	configured := normalizeConfiguredVideoFormat(state)
+	switch configured {
+	case "local_url", "local_html":
+		if urlValue := ensureLocalVideoURL(ctx, state, token, rawURL); urlValue != "" {
+			return urlValue
+		}
+	}
+	return rawURL
+}
+
+func renderVideoValue(state *app.State, rawURL string) string {
+	configured := normalizeConfiguredVideoFormat(state)
+	switch configured {
+	case "grok_html", "local_html":
+		return htmlVideo(rawURL)
+	default:
+		return rawURL
+	}
+}
+
 func imageOutputs(ctx context.Context, state *app.State, token string, items []xai.GeneratedImage, responseFormat string) ([]map[string]any, error) {
 	outputs := make([]map[string]any, 0, len(items))
-	useLocal := appURL(state) != ""
 	for _, item := range items {
-		switch responseFormat {
-		case "b64_json":
-			if item.BlobB64 != "" {
-				outputs = append(outputs, map[string]any{"b64_json": item.BlobB64})
-				continue
-			}
-			data, _, err := state.XAI.DownloadContent(ctx, token, item.URL)
-			if err != nil {
-				return nil, err
-			}
-			outputs = append(outputs, map[string]any{"b64_json": base64.StdEncoding.EncodeToString(data)})
-		default:
-			if !useLocal {
-				outputs = append(outputs, map[string]any{"url": item.URL})
-				continue
-			}
-			data, contentType, err := state.XAI.DownloadContent(ctx, token, item.URL)
-			if err != nil {
-				outputs = append(outputs, map[string]any{"url": item.URL})
-				continue
-			}
-			fileID := fileIDFromURL(item.URL)
-			extension := inferImageExtension(contentType, item.URL)
-			if _, err := saveBytes(paths.ImageCacheDir(), fileID, extension, data); err != nil {
-				outputs = append(outputs, map[string]any{"url": item.URL})
-				continue
-			}
-			outputs = append(outputs, map[string]any{"url": localImageURL(state, fileID)})
+		output, err := prepareImageOutput(ctx, state, token, item, responseFormat)
+		if err != nil {
+			return nil, err
 		}
+		if output.B64JSON != "" {
+			outputs = append(outputs, map[string]any{"b64_json": output.B64JSON})
+			continue
+		}
+		outputs = append(outputs, map[string]any{"url": output.APIURL})
 	}
 	return outputs, nil
 }
@@ -291,46 +438,69 @@ func extractImageInputURL(item map[string]any) string {
 }
 
 func generateImages(ctx context.Context, state *app.State, spec model.Spec, prompt string, cfg imageConfig, chatFormat bool) (any, error) {
-	lease, err := reserveLease(state, spec, nil)
-	if err != nil {
-		return nil, err
-	}
-	items, reasoning, meta, err := state.XAI.GenerateImages(ctx, lease.Token, xai.ImageRequest{
-		Model:  spec.Name,
-		Mode:   spec.Mode,
-		Prompt: prompt,
-		N:      cfg.N,
-		Size:   cfg.Size,
-	})
-	if err != nil {
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
-		return nil, err
-	}
-	_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
-	if meta == nil || !meta.SawRateLimit {
-		refreshQuotaAsync(state, lease.Token)
-	}
-	outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
-	if err != nil {
-		return nil, err
-	}
-	if cfg.N < len(outputs) {
-		outputs = outputs[:cfg.N]
-	}
-	if chatFormat {
-		contentParts := make([]string, 0, len(outputs))
-		for _, item := range outputs {
-			if urlValue, _ := item["url"].(string); urlValue != "" {
-				contentParts = append(contentParts, fmt.Sprintf("![image](%s)", urlValue))
+	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
+	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	excluded := map[string]struct{}{}
+	var lastRetryErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		lease, err := reserveLease(state, spec, excluded)
+		if err != nil {
+			if lastRetryErr != nil {
+				return nil, lastRetryErr
+			}
+			return nil, err
+		}
+		items, reasoning, meta, err := state.XAI.GenerateImages(ctx, lease.Token, xai.ImageRequest{
+			Model:  spec.Name,
+			Mode:   spec.Mode,
+			Prompt: prompt,
+			N:      cfg.N,
+			Size:   cfg.Size,
+		})
+		if err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if shouldRetry(err, retryCodes, attempt, maxRetries) {
+				excluded[lease.Token] = struct{}{}
+				lastRetryErr = err
 				continue
 			}
-			if b64, _ := item["b64_json"].(string); b64 != "" {
-				contentParts = append(contentParts, b64)
-			}
+			return nil, err
 		}
-		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil, nil), nil
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
+		if meta == nil || !meta.SawRateLimit {
+			refreshQuotaAsync(state, lease.Token)
+		}
+		outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.N < len(outputs) {
+			outputs = outputs[:cfg.N]
+		}
+		if chatFormat {
+			contentParts := make([]string, 0, len(outputs))
+			for _, item := range items {
+				output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
+				if err != nil {
+					return nil, err
+				}
+				if output.ChatValue != "" {
+					contentParts = append(contentParts, output.ChatValue)
+					continue
+				}
+				if output.B64JSON != "" {
+					contentParts = append(contentParts, output.B64JSON)
+				}
+			}
+			return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil, nil), nil
+		}
+		return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 	}
-	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
+	if lastRetryErr != nil {
+		return nil, lastRetryErr
+	}
+	return nil, fmt.Errorf("no available accounts")
 }
 
 func imageFeedback(meta *xai.ImageGenerationMeta) account.Feedback {
@@ -365,9 +535,17 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 	}
 	if chatFormat {
 		contentParts := make([]string, 0, len(outputs))
-		for _, item := range outputs {
-			if urlValue, _ := item["url"].(string); urlValue != "" {
-				contentParts = append(contentParts, fmt.Sprintf("![image](%s)", urlValue))
+		for _, item := range items {
+			output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
+			if err != nil {
+				return nil, err
+			}
+			if output.ChatValue != "" {
+				contentParts = append(contentParts, output.ChatValue)
+				continue
+			}
+			if output.B64JSON != "" {
+				contentParts = append(contentParts, output.B64JSON)
 			}
 		}
 		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), "", nil, nil), nil
@@ -405,16 +583,17 @@ func createVideo(ctx context.Context, state *app.State, spec model.Spec, prompt 
 		CreatedAt: time.Now().Unix(),
 		VideoURL:  video.URL,
 	}
-	if appURL(state) != "" {
-		if data, contentType, downloadErr := state.XAI.DownloadContent(ctx, lease.Token, video.URL); downloadErr == nil {
-			fileID := fileIDFromURL(video.URL)
-			extension := inferVideoExtension(contentType, video.URL)
-			if path, saveErr := saveBytes(paths.VideoCacheDir(), fileID, extension, data); saveErr == nil {
-				job.ContentPath = path
-				job.VideoURL = localVideoURL(state, fileID)
-			}
+	resolvedVideoURL := video.URL
+	if localURL := ensureLocalVideoURL(ctx, state, lease.Token, video.URL); localURL != "" {
+		resolvedVideoURL = localURL
+		if path, _ := localFilePath(paths.VideoCacheDir(), fileIDFromURL(video.URL)); path != "" {
+			job.ContentPath = path
 		}
 	}
+	if normalizeConfiguredVideoFormat(state) == "grok_url" || normalizeConfiguredVideoFormat(state) == "grok_html" {
+		resolvedVideoURL = video.URL
+	}
+	job.VideoURL = resolvedVideoURL
 	job.CompletedAt = time.Now().Unix()
 	videoJobsMu.Lock()
 	videoJobs[job.ID] = job
@@ -458,7 +637,10 @@ func getVideoJob(id string) *videoJob {
 	return &copyJob
 }
 
-func videoChatResponse(spec model.Spec, raw map[string]any) map[string]any {
+func videoChatResponse(state *app.State, spec model.Spec, raw map[string]any) map[string]any {
+	if rawURL, _ := raw["url"].(string); rawURL != "" {
+		return chatResponse(spec.Name, renderVideoValue(state, rawURL), "", nil, nil)
+	}
 	b, _ := json.Marshal(raw)
 	return chatResponse(spec.Name, string(b), "", nil, nil)
 }

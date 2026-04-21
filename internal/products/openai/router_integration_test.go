@@ -44,6 +44,7 @@ func TestOpenAIRoutes(t *testing.T) {
 	}
 	if _, err := repo.UpsertAccounts(context.Background(), []account.Upsert{
 		{Token: "token-1", Pool: "basic"},
+		{Token: "token-2", Pool: "basic"},
 		{Token: "token-super", Pool: "super"},
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -89,6 +90,42 @@ func TestOpenAIRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	Mount(router, state)
+
+	resetImageTestTokens := func(t *testing.T) {
+		t.Helper()
+		status := account.StatusActive
+		reason := ""
+		tokenOneLastUse := int64(0)
+		tokenTwoLastUse := int64(1)
+		patches := []account.Patch{
+			{
+				Token:       "token-1",
+				Status:      &status,
+				StateReason: &reason,
+				LastUseAt:   &tokenOneLastUse,
+				Quota: map[string]account.QuotaWindow{
+					"fast": account.DefaultQuotaSet("basic").Fast,
+				},
+				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+			},
+			{
+				Token:       "token-2",
+				Status:      &status,
+				StateReason: &reason,
+				LastUseAt:   &tokenTwoLastUse,
+				Quota: map[string]account.QuotaWindow{
+					"fast": account.DefaultQuotaSet("basic").Fast,
+				},
+				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+			},
+		}
+		if _, err := repo.PatchAccounts(context.Background(), patches); err != nil {
+			t.Fatalf("reset image test tokens: %v", err)
+		}
+		if err := runtime.Sync(context.Background()); err != nil {
+			t.Fatalf("sync runtime after image token reset: %v", err)
+		}
+	}
 
 	t.Run("models", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -289,6 +326,7 @@ func TestOpenAIRoutes(t *testing.T) {
 	})
 
 	t.Run("image generation", func(t *testing.T) {
+		resetImageTestTokens(t)
 		fake.AppChatImageMode = "final"
 		fake.WebsocketImageMode = "final"
 		body := map[string]any{
@@ -312,6 +350,7 @@ func TestOpenAIRoutes(t *testing.T) {
 	})
 
 	t.Run("image generation partial fallback", func(t *testing.T) {
+		resetImageTestTokens(t)
 		fake.AppChatImageMode = "preview"
 		fake.WebsocketImageMode = "partial"
 		body := map[string]any{
@@ -335,6 +374,9 @@ func TestOpenAIRoutes(t *testing.T) {
 	})
 
 	t.Run("image generation rate limited marks cooling", func(t *testing.T) {
+		resetImageTestTokens(t)
+		fake.AppChatImageModes = map[string]string{}
+		fake.WebsocketImageModes = map[string]string{}
 		fake.AppChatImageMode = "rate_limit"
 		fake.WebsocketImageMode = "final"
 		body := map[string]any{
@@ -359,21 +401,54 @@ func TestOpenAIRoutes(t *testing.T) {
 		if records[0].Status != account.StatusCooling {
 			t.Fatalf("expected token cooling after 429 fallback, got: %#v", records[0])
 		}
-		_, err = repo.PatchAccounts(context.Background(), []account.Patch{{
-			Token:       "token-1",
-			Status:      func() *account.Status { status := account.StatusActive; return &status }(),
-			StateReason: func() *string { reason := ""; return &reason }(),
-			Quota: map[string]account.QuotaWindow{
-				"fast": account.DefaultQuotaSet("basic").Fast,
-			},
-			ExtMerge: map[string]any{"cooldown_until": int64(0)},
-		}})
-		if err != nil {
-			t.Fatalf("reset token after rate limit fallback: %v", err)
+	})
+
+	t.Run("image generation retries next token after same-token rate limit", func(t *testing.T) {
+		resetImageTestTokens(t)
+		fake.AppChatImageMode = "final"
+		fake.WebsocketImageMode = "final"
+		fake.AppChatImageModes = map[string]string{
+			"token-1": "rate_limit",
+			"token-2": "final",
 		}
-		if err := runtime.Sync(context.Background()); err != nil {
-			t.Fatalf("sync runtime after reset: %v", err)
+		fake.WebsocketImageModes = map[string]string{
+			"token-1": "rate_limit",
+			"token-2": "final",
 		}
+		body := map[string]any{
+			"model":           "grok-imagine-image-lite",
+			"prompt":          "generate image",
+			"n":               1,
+			"response_format": "url",
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer test-api-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp := testutil.NewCloseNotifyRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), `"data"`) {
+			t.Fatalf("unexpected body: %s", resp.Body.String())
+		}
+		records, err := repo.GetAccounts(context.Background(), []string{"token-1", "token-2"})
+		if err != nil || len(records) != 2 {
+			t.Fatalf("get tokens after retry failed: %v %#v", err, records)
+		}
+		byToken := map[string]account.Record{}
+		for _, record := range records {
+			byToken[record.Token] = record
+		}
+		if byToken["token-1"].Status != account.StatusCooling {
+			t.Fatalf("expected token-1 cooling after terminal 429, got: %#v", byToken["token-1"])
+		}
+		if byToken["token-2"].Status != account.StatusActive {
+			t.Fatalf("expected token-2 active after retry success, got: %#v", byToken["token-2"])
+		}
+		fake.AppChatImageModes = map[string]string{}
+		fake.WebsocketImageModes = map[string]string{}
 	})
 
 	t.Run("image edits", func(t *testing.T) {

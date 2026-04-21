@@ -57,28 +57,32 @@ func (r *CloseNotifyRecorder) CloseNotify() <-chan bool {
 }
 
 type FakeGrokServer struct {
-	Server             *httptest.Server
-	mu                 sync.Mutex
-	ChatContent        string
-	Reasoning          string
-	Assets             []map[string]any
-	ImageURL           string
-	PartialImageURL    string
-	PreviewImageURL    string
-	VideoURL           string
-	AppChatImageMode   string
-	WebsocketImageMode string
-	ImageEditMode      string
+	Server              *httptest.Server
+	mu                  sync.Mutex
+	ChatContent         string
+	Reasoning           string
+	Assets              []map[string]any
+	ImageURL            string
+	PartialImageURL     string
+	PreviewImageURL     string
+	VideoURL            string
+	AppChatImageMode    string
+	WebsocketImageMode  string
+	ImageEditMode       string
+	AppChatImageModes   map[string]string
+	WebsocketImageModes map[string]string
 }
 
 func NewFakeGrokServer() *FakeGrokServer {
 	fake := &FakeGrokServer{
-		ChatContent:        "Hello from fake grok",
-		Reasoning:          "thinking",
-		Assets:             []map[string]any{{"id": "asset-1"}, {"id": "asset-2"}},
-		AppChatImageMode:   "final",
-		WebsocketImageMode: "final",
-		ImageEditMode:      "final",
+		ChatContent:         "Hello from fake grok",
+		Reasoning:           "thinking",
+		Assets:              []map[string]any{{"id": "asset-1"}, {"id": "asset-2"}},
+		AppChatImageMode:    "final",
+		WebsocketImageMode:  "final",
+		ImageEditMode:       "final",
+		AppChatImageModes:   map[string]string{},
+		WebsocketImageModes: map[string]string{},
 	}
 
 	mux := http.NewServeMux()
@@ -162,7 +166,7 @@ func (f *FakeGrokServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.HasPrefix(message, "Drawing:") || strings.Contains(strings.ToLower(modelName), "image") {
-		f.handleImageChat(w, message, modelName, modeID)
+		f.handleImageChat(w, r, message, modelName, modeID)
 		return
 	}
 
@@ -188,12 +192,18 @@ func (f *FakeGrokServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
 }
 
-func (f *FakeGrokServer) handleImageChat(w http.ResponseWriter, message, modelName, modeID string) {
+func (f *FakeGrokServer) handleImageChat(w http.ResponseWriter, r *http.Request, message, modelName, modeID string) {
 	channel := "websocket"
 	scenario := f.WebsocketImageMode
+	token := extractSSOToken(r.Header.Get("Cookie"))
 	if strings.HasPrefix(message, "Drawing:") || modeID != "" {
 		channel = "app_chat"
 		scenario = f.AppChatImageMode
+		if tokenScenario := f.imageModeForToken(token, true); tokenScenario != "" {
+			scenario = tokenScenario
+		}
+	} else if tokenScenario := f.imageModeForToken(token, false); tokenScenario != "" {
+		scenario = tokenScenario
 	}
 	if strings.EqualFold(scenario, "rate_limit") {
 		http.Error(w, `{"error":"image rate limit exceeded"}`, http.StatusTooManyRequests)
@@ -216,6 +226,25 @@ func (f *FakeGrokServer) handleImageChat(w http.ResponseWriter, message, modelNa
 
 	done, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"finalMetadata": map[string]any{"complete": true}}}})
 	_, _ = w.Write([]byte("data: " + string(done) + "\n\n"))
+}
+
+func (f *FakeGrokServer) imageModeForToken(token string, appChat bool) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if appChat {
+		return strings.TrimSpace(f.AppChatImageModes[token])
+	}
+	return strings.TrimSpace(f.WebsocketImageModes[token])
+}
+
+func extractSSOToken(cookieHeader string) string {
+	for _, part := range strings.Split(cookieHeader, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "sso=") {
+			return strings.TrimPrefix(part, "sso=")
+		}
+	}
+	return ""
 }
 
 func (f *FakeGrokServer) imageFrame(channel string, progress int, imageURL string, final bool) []byte {

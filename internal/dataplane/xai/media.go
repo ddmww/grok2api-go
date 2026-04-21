@@ -159,7 +159,7 @@ func resolveAssetReference(token, fileID, fileURI string) string {
 		}
 		return "https://assets.grok.com/" + strings.TrimLeft(fileURI, "/")
 	}
-	cookie := buildSSOCookie(nil, token)
+	cookie := buildSSOCookie(nil, token, nil)
 	if match := xUserIDPattern.FindStringSubmatch(cookie); len(match) == 2 && fileID != "" {
 		return fmt.Sprintf("https://assets.grok.com/users/%s/%s/content", match[1], fileID)
 	}
@@ -173,7 +173,7 @@ func resolveAssetReferenceWithConfig(cfg *config.Service, token, fileID, fileURI
 		}
 		return "https://assets.grok.com/" + strings.TrimLeft(fileURI, "/")
 	}
-	cookie := buildSSOCookie(cfg, token)
+	cookie := buildSSOCookie(cfg, token, nil)
 	if match := xUserIDPattern.FindStringSubmatch(cookie); len(match) == 2 && fileID != "" {
 		return fmt.Sprintf("https://assets.grok.com/users/%s/%s/content", match[1], fileID)
 	}
@@ -189,7 +189,7 @@ func (c *Client) doRequest(ctx context.Context, method, urlValue, token, content
 	if err != nil {
 		return nil, err
 	}
-	request.Header = c.buildHeaders(token, contentType, origin, referer)
+	request.Header = c.buildHeaders(proxyKey, token, contentType, origin, referer)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
@@ -226,6 +226,14 @@ func (c *Client) postJSON(ctx context.Context, endpoint, token string, payload m
 }
 
 func (c *Client) UploadFromInput(ctx context.Context, token, input string) (*UploadedAsset, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "asset.upload_timeout", 60)
+	defer cancel()
+	release, err := c.acquireUpload(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	input = strings.TrimSpace(input)
 	switch {
 	case input == "":
@@ -270,6 +278,8 @@ func (c *Client) uploadBase64(ctx context.Context, token, filename, mimeType, b6
 }
 
 func (c *Client) CreateMediaPost(ctx context.Context, token, mediaType, mediaURL, prompt, referer string) (map[string]any, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "video.timeout", 60)
+	defer cancel()
 	payload := map[string]any{"mediaType": mediaType}
 	if mediaURL != "" {
 		payload["mediaUrl"] = mediaURL
@@ -284,6 +294,8 @@ func (c *Client) CreateMediaPost(ctx context.Context, token, mediaType, mediaURL
 }
 
 func (c *Client) CreateMediaLink(ctx context.Context, token, postID string) (map[string]any, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "video.timeout", 60)
+	defer cancel()
 	return c.postJSON(ctx, "/rest/media/post/create-link", token, map[string]any{
 		"postId":   postID,
 		"source":   "post-page",
@@ -292,6 +304,8 @@ func (c *Client) CreateMediaLink(ctx context.Context, token, postID string) (map
 }
 
 func (c *Client) DownloadContent(ctx context.Context, token, rawURL string) ([]byte, string, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "asset.download_timeout", 60)
+	defer cancel()
 	target := strings.TrimSpace(rawURL)
 	if target == "" {
 		return nil, "", fmt.Errorf("empty download URL")
@@ -790,11 +804,13 @@ func (c *Client) generateImagesViaWebsocketLive(ctx context.Context, token strin
 }
 
 func (c *Client) streamImagineWebsocketOnce(ctx context.Context, token, prompt, aspectRatio string, count int) ([]GeneratedImage, error) {
-	headers := buildWSHeaders(c.cfg, token, "https://grok.com")
+	proxyURL := c.proxy.ProxyURL(false)
+	bundle, _ := c.proxy.Clearance(proxyURL)
+	headers := buildWSHeaders(c.cfg, token, "https://grok.com", bundle)
 	wsURL := "wss://grok.com/ws/imagine/listen"
 
 	timeout := time.Duration(c.cfg.GetFloat("image.timeout", 60) * float64(time.Second))
-	conn, err := dialImagineWebsocket(ctx, wsURL, headers, timeout, c.cfg, c.proxy.ProxyURL(false))
+	conn, err := dialImagineWebsocket(ctx, wsURL, headers, timeout, c.cfg, proxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1423,6 +1439,8 @@ func defaultResolutionName(size string) string {
 }
 
 func (c *Client) CreateVideo(ctx context.Context, token string, req VideoRequest) (*VideoResult, error) {
+	ctx, cancel := c.withConfigTimeout(ctx, "video.timeout", 60)
+	defer cancel()
 	preset := strings.TrimSpace(req.Preset)
 	if preset == "" {
 		preset = "custom"

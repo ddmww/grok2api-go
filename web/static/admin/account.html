@@ -2070,20 +2070,28 @@ function doExport() {
   document.getElementById('exp-json-btn').onclick = async () => {
     closeModal('modal-export');
     try {
-      const tokens = await fetchAllFilteredTokens();
-      const out = {};
-      tokens.forEach(t => (out[t.pool||'basic'] = out[t.pool||'basic']||[]).push({token:t.token,tags:t.tags||[]}));
-      _download(JSON.stringify(out,null,2), `tokens-${currentFilterSuffix()}.json`, 'application/json');
+      const label = tr('account.exportJson', null, 'JSON格式（完整导出）');
+      showToast(`${tr('account.export', null, '导出数据')} · ${label}`, 'info');
+      showInlineProgress(`${tr('account.export', null, '导出数据')} · ${label}`, 0, 1);
+      await exportSelection('json');
+      updateInlineProgress(1, 1);
+      finishInlineProgress(`${label} ${tr('account.addDone', null, '完成')}`, 'success');
     } catch (e) {
+      finishInlineProgress(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
       showToast(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
     }
   };
   document.getElementById('exp-txt-btn').onclick = async () => {
     closeModal('modal-export');
     try {
-      const tokens = await fetchAllFilteredTokens();
-      _download(tokens.map(t => t.token).join('\n'), `tokens-${currentFilterSuffix()}.txt`, 'text/plain');
+      const label = tr('account.exportTxt', null, 'TXT格式（仅导出 Token）');
+      showToast(`${tr('account.export', null, '导出数据')} · ${label}`, 'info');
+      showInlineProgress(`${tr('account.export', null, '导出数据')} · ${label}`, 0, 1);
+      await exportSelection('txt');
+      updateInlineProgress(1, 1);
+      finishInlineProgress(`${label} ${tr('account.addDone', null, '完成')}`, 'success');
     } catch (e) {
+      finishInlineProgress(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
       showToast(`${tr('account.exportFailed', null, '导出失败')}: ${e.message}`, 'error');
     }
   };
@@ -2097,6 +2105,40 @@ function _download(content, filename, mime) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([content], {type: mime}));
   a.download = filename; a.click();
+}
+
+function _downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function filenameFromDisposition(disposition, fallback) {
+  const match = /filename=\"?([^\";]+)\"?/i.exec(disposition || '');
+  return match?.[1] || fallback;
+}
+
+async function exportSelection(format) {
+  const key = await adminKey.get();
+  const payload = { ...currentSelectionPayload(), format };
+  const resp = await fetch(`${ADMIN_API}/tokens/export`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.message || data.detail || String(resp.status));
+  }
+  const blob = await resp.blob();
+  const fallbackName = `tokens-${currentFilterSuffix()}.${format}`;
+  _downloadBlob(blob, filenameFromDisposition(resp.headers.get('Content-Disposition'), fallbackName));
 }
 
 // ── Delete ─────────────────────────────────────────────────────────────────

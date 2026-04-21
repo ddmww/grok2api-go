@@ -8,13 +8,7 @@
     "adminTitle": "管理后台",
     "adminSubtitle": "请输入后台密码以继续",
     "adminPlaceholder": "后台密码",
-    "continue": "继续",
-    "webuiPageTitle": "Grok2API - WebUI",
-    "webuiTitle": "WebUI",
-    "webuiSubtitle": "请输入访问密钥",
-    "webuiPlaceholder": "访问密钥",
-    "enter": "进入",
-    "goToAdmin": "进入管理后台"
+    "continue": "继续"
   },
   "header": {
     "account": "账户管理",
@@ -34,115 +28,6 @@
     "versionNotesEmpty": "暂无更新说明。",
     "versionOpenRelease": "发布详情",
     "versionClose": "关闭"
-  },
-  "webui": {
-    "header": {
-      "chat": "聊天",
-      "masonry": "瀑布流",
-      "chatkit": "ChatKit"
-    },
-    "chat": {
-      "pageTitle": "Grok2API - WebChat",
-      "sidebarTitle": "会话",
-      "newChat": "新建聊天",
-      "toggleSidebar": "折叠侧边栏",
-      "upload": "上传文件",
-      "noSessions": "暂无会话",
-      "untitled": "新建聊天",
-      "rename": "改名",
-      "delete": "删除",
-      "edit": "编辑",
-      "copy": "复制",
-      "regenerate": "重新生成",
-      "like": "点赞",
-      "dislike": "点踩",
-      "reasoning": "思考过程",
-      "save": "保存",
-      "cancel": "取消",
-      "confirm": "确认",
-      "copySuccess": "已复制",
-      "renamePrompt": "修改会话名称",
-      "deleteConfirm": "确定删除这个会话吗？",
-      "modelLabel": "模型",
-      "emptyTitle": "Grok Chat",
-      "empty": "输入一条消息开始新的会话。",
-      "promptPlaceholder": "输入你的问题，Enter 发送，Shift+Enter 换行",
-      "editPlaceholder": "编辑这条消息",
-      "stop": "停止",
-      "send": "发送",
-      "statusReady": "就绪",
-      "statusConnecting": "正在连接…",
-      "statusThinking": "思考中…",
-      "statusGenerating": "生成中…",
-      "statusDone": "完成",
-      "statusStopped": "已停止",
-      "statusFailed": "失败",
-      "statusInitFailed": "初始化失败",
-      "errors": {
-        "enterPrompt": "请输入内容",
-        "imageRequired": "图像编辑至少需要上传一张参考图",
-        "imageOnly": "图像编辑只支持上传图片",
-        "videoImageOnly": "视频生成只支持上传图片作为参考图",
-        "requestFailed": "请求失败",
-        "initFailed": "聊天页面初始化失败"
-      }
-    },
-    "chatkit": {
-      "pageTitle": "Grok2API - ChatKit",
-      "voiceLabel": "声音",
-      "personalityLabel": "个性",
-      "speedLabel": "语速",
-      "start": "开始",
-      "pause": "暂停",
-      "mute": "静音",
-      "unmute": "取消静音",
-      "newSession": "新会话",
-      "statusIdle": "未连接",
-      "statusConnecting": "正在连接",
-      "statusLive": "语音中",
-      "statusMuted": "已静音",
-      "statusPaused": "已暂停",
-      "statusError": "连接失败",
-      "idleText": "点击并授权，通过 ChatKit 语音会话连接 Grok Voice。",
-      "connectingText": "正在向 Grok Voice 申请会话并连接 LiveKit…",
-      "liveText": "连接已建立，现在可以直接开口和 Grok 对话。",
-      "outputMutedText": "扬声器已静音，你仍然可以继续说话。",
-      "pausedText": "会话已暂停，点击开始即可继续当前语音会话。",
-      "errorText": "连接没有建立成功，请检查麦克风权限后重试。",
-      "endedText": "语音会话已结束，可以重新开始。",
-      "livekitLoadFailed": "LiveKit SDK 加载失败",
-      "invalidToken": "语音 token 返回无效"
-    },
-    "masonry": {
-      "pageTitle": "Grok2API - Masonry",
-      "title": "Masonry",
-      "qualitySpeed": "速度",
-      "qualityQuality": "质量",
-      "modeRounds": "轮次",
-      "modeCycles": "循环",
-      "promptPlaceholder": "描述你想生成的画面，Enter 生成，Shift+Enter 换行",
-      "generate": "生成",
-      "stop": "停止",
-      "openImage": "打开图片",
-      "statusReady": "就绪",
-      "statusConnecting": "连接中…",
-      "statusGenerating": "正在生成",
-      "statusCompleted": "完成",
-      "statusStopped": "已停止",
-      "statusFailed": "失败",
-      "statusSuccess": "生成成功",
-      "statusPartialFailure": "部分失败",
-      "statusBatchFailed": "生成失败",
-      "emptyTitle": "从一句提示词开始",
-      "emptyText": "输入提示词后，图片会按顺序显示在这里。",
-      "roundLabel": "第 {n} 轮",
-      "batchFiltered": "已过滤",
-      "errors": {
-        "enterPrompt": "请输入提示词",
-        "requestFailed": "请求失败",
-        "initFailed": "瀑布流页面初始化失败"
-      }
-    }
   },
   "account": {
     "pageTitle": "Grok2API - 账户管理",
@@ -374,14 +259,6 @@
         "apiKey": {
           "label": "API 调用密钥",
           "desc": "OpenAI 兼容 API 的鉴权密钥。多个值请使用英文逗号分隔；留空则禁用鉴权。"
-        },
-        "webuiEnabled": {
-          "label": "启用 WebUI",
-          "desc": "开放 WebUI 功能入口。关闭后相关路由将返回 404。"
-        },
-        "webuiKey": {
-          "label": "WebUI 访问密码",
-          "desc": "WebUI 的访问鉴权密码。配置后访问时必须提供。"
         },
         "temporary": {
           "label": "临时会话",

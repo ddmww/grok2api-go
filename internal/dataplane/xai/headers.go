@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ddmww/grok2api-go/internal/control/proxy"
 	"github.com/ddmww/grok2api-go/internal/platform/config"
 	"github.com/google/uuid"
 )
@@ -64,13 +65,21 @@ func sanitizeHeaderValue(value string, stripSpaces bool) string {
 	}, sanitized)
 }
 
-func buildSSOCookie(cfg *config.Service, token string) string {
+func buildSSOCookie(cfg *config.Service, token string, bundle *proxy.ClearanceBundle) string {
 	cookie := fmt.Sprintf("sso=%s; sso-rw=%s", sanitizeToken(token), sanitizeToken(token))
 	cfCookies := ""
 	cfClearance := ""
+	if bundle != nil {
+		cfCookies = sanitizeHeaderValue(bundle.CFCookies, false)
+	}
 	if cfg != nil {
 		cfCookies = sanitizeHeaderValue(cfg.GetString("proxy.clearance.cf_cookies", ""), false)
 		cfClearance = sanitizeHeaderValue(cfg.GetString("proxy.clearance.cf_clearance", cfg.GetString("proxy.cf_clearance", "")), true)
+		if bundle != nil {
+			if cookies := sanitizeHeaderValue(bundle.CFCookies, false); cookies != "" {
+				cfCookies = cookies
+			}
+		}
 	}
 	if cfClearance != "" {
 		if cfCookies == "" {
@@ -87,7 +96,7 @@ func buildSSOCookie(cfg *config.Service, token string) string {
 	return cookie
 }
 
-func buildRequestHeaders(cfg *config.Service, token, contentType, origin, referer string) http.Header {
+func buildRequestHeaders(cfg *config.Service, token, contentType, origin, referer string, bundle *proxy.ClearanceBundle) http.Header {
 	if contentType == "" {
 		contentType = "application/json"
 	}
@@ -99,8 +108,14 @@ func buildRequestHeaders(cfg *config.Service, token, contentType, origin, refere
 	}
 
 	rawUserAgent := cfg.GetString("proxy.clearance.user_agent", defaultUserAgent)
+	if bundle != nil && strings.TrimSpace(bundle.UserAgent) != "" {
+		rawUserAgent = bundle.UserAgent
+	}
 	userAgent := sanitizeHeaderValue(rawUserAgent, false)
 	browser := resolveBrowser(cfg, rawUserAgent)
+	if bundle != nil && strings.TrimSpace(bundle.Browser) != "" {
+		browser = strings.TrimSpace(bundle.Browser)
+	}
 	accept, fetchDest := resolveAccept(contentType)
 
 	headers := http.Header{}
@@ -116,7 +131,7 @@ func buildRequestHeaders(cfg *config.Service, token, contentType, origin, refere
 	headers.Set("Sec-Fetch-Mode", "cors")
 	headers.Set("Sec-Fetch-Site", resolveFetchSite(origin, referer))
 	headers.Set("User-Agent", userAgent)
-	headers.Set("Cookie", buildSSOCookie(cfg, token))
+	headers.Set("Cookie", buildSSOCookie(cfg, token, bundle))
 	headers.Set("x-statsig-id", statsigID(cfg))
 	headers.Set("x-xai-request-id", uuid.NewString())
 
@@ -127,13 +142,19 @@ func buildRequestHeaders(cfg *config.Service, token, contentType, origin, refere
 	return headers
 }
 
-func buildWSHeaders(cfg *config.Service, token, origin string) http.Header {
+func buildWSHeaders(cfg *config.Service, token, origin string, bundle *proxy.ClearanceBundle) http.Header {
 	if origin == "" {
 		origin = "https://grok.com"
 	}
 	rawUserAgent := cfg.GetString("proxy.clearance.user_agent", defaultUserAgent)
+	if bundle != nil && strings.TrimSpace(bundle.UserAgent) != "" {
+		rawUserAgent = bundle.UserAgent
+	}
 	userAgent := sanitizeHeaderValue(rawUserAgent, false)
 	browser := resolveBrowser(cfg, rawUserAgent)
+	if bundle != nil && strings.TrimSpace(bundle.Browser) != "" {
+		browser = strings.TrimSpace(bundle.Browser)
+	}
 
 	headers := http.Header{}
 	headers.Set("Origin", sanitizeHeaderValue(origin, false))
@@ -141,7 +162,7 @@ func buildWSHeaders(cfg *config.Service, token, origin string) http.Header {
 	headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	headers.Set("Cache-Control", "no-cache")
 	headers.Set("Pragma", "no-cache")
-	headers.Set("Cookie", buildSSOCookie(cfg, token))
+	headers.Set("Cookie", buildSSOCookie(cfg, token, bundle))
 
 	for key, value := range clientHints(browser, rawUserAgent) {
 		headers.Set(key, value)

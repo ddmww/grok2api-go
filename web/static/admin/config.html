@@ -755,7 +755,7 @@ function _evalDisabledWhen(condition) {
 }
 
 // Evaluate a showIf condition.
-// String form: truthy check on config path.  "app.webui_enabled"
+// String form: truthy check on config path.  "features.stream"
 // Object form: value-in-list check.          { path: "proxy.egress.mode", values: ["single_proxy"] }
 function _evalShowIf(showIf) {
   if (!showIf) return true;

@@ -10,11 +10,12 @@ import (
 )
 
 type State struct {
-	Config  *config.Service
-	Repo    account.Repository
-	Runtime *account.Runtime
-	Refresh *refresh.Service
-	Proxy   *proxy.Runtime
-	XAI     *xai.Client
-	Tasks   *tasks.Store
+	Config           *config.Service
+	Repo             account.Repository
+	Runtime          *account.Runtime
+	Refresh          *refresh.Service
+	Proxy            *proxy.Runtime
+	ProxyClearance   *proxy.ClearanceScheduler
+	XAI              *xai.Client
+	Tasks            *tasks.Store
 }

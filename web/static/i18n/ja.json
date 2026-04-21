@@ -8,122 +8,7 @@
     "adminTitle": "管理パネル",
     "adminSubtitle": "続行するには管理者パスワードを入力してください",
     "adminPlaceholder": "管理者パスワード",
-    "continue": "続行",
-    "webuiPageTitle": "Grok2API - WebUI",
-    "webuiTitle": "WebUI",
-    "webuiSubtitle": "アクセスキーを入力してください",
-    "webuiPlaceholder": "アクセスキー",
-    "enter": "入る",
-    "goToAdmin": "管理パネルへ"
-  },
-  "webui": {
-    "header": {
-      "chat": "Chat",
-      "masonry": "Masonry",
-      "chatkit": "ChatKit"
-    },
-    "chat": {
-      "pageTitle": "Grok2API - WebChat",
-      "sidebarTitle": "チャット",
-      "newChat": "新しいチャット",
-      "toggleSidebar": "サイドバーを切り替え",
-      "upload": "ファイルをアップロード",
-      "noSessions": "まだチャットはありません",
-      "untitled": "新しいチャット",
-      "rename": "名前を変更",
-      "delete": "削除",
-      "edit": "編集",
-      "copy": "コピー",
-      "regenerate": "再生成",
-      "like": "高評価",
-      "dislike": "低評価",
-      "reasoning": "思考",
-      "save": "保存",
-      "cancel": "キャンセル",
-      "confirm": "確認",
-      "copySuccess": "コピーしました",
-      "renamePrompt": "チャット名を変更",
-      "deleteConfirm": "このチャットを削除しますか？",
-      "modelLabel": "モデル",
-      "emptyTitle": "Grok Chat",
-      "empty": "メッセージを送信して新しい会話を始めてください。",
-      "promptPlaceholder": "メッセージを入力してください。Enter で送信、Shift+Enter で改行します。",
-      "editPlaceholder": "このメッセージを編集",
-      "stop": "停止",
-      "send": "送信",
-      "statusReady": "準備完了",
-      "statusConnecting": "接続中...",
-      "statusThinking": "思考中...",
-      "statusGenerating": "生成中...",
-      "statusDone": "完了",
-      "statusStopped": "停止済み",
-      "statusFailed": "失敗",
-      "statusInitFailed": "初期化に失敗しました",
-      "errors": {
-        "enterPrompt": "メッセージを入力してください",
-        "imageRequired": "画像編集には少なくとも 1 枚の参照画像が必要です",
-        "imageOnly": "画像編集では画像ファイルのみアップロードできます",
-        "videoImageOnly": "動画生成では参照として画像のみアップロードできます",
-        "requestFailed": "リクエストに失敗しました",
-        "initFailed": "チャットページの初期化に失敗しました"
-      }
-    },
-    "chatkit": {
-      "pageTitle": "Grok2API - ChatKit",
-      "voiceLabel": "音声",
-      "personalityLabel": "性格",
-      "speedLabel": "速度",
-      "start": "開始",
-      "pause": "一時停止",
-      "mute": "ミュート",
-      "unmute": "ミュート解除",
-      "newSession": "新しいセッション",
-      "statusIdle": "未接続",
-      "statusConnecting": "接続中",
-      "statusLive": "会話中",
-      "statusMuted": "ミュート中",
-      "statusPaused": "一時停止中",
-      "statusError": "失敗",
-      "idleText": "クリックして許可すると、ChatKit の音声セッションを通じて Grok Voice に接続できます。",
-      "connectingText": "Grok Voice セッションを要求し、LiveKit に接続しています...",
-      "liveText": "接続されました。これで Grok と直接会話できます。",
-      "outputMutedText": "スピーカーはミュートされていますが、会話は続けられます。",
-      "pausedText": "セッションは一時停止中です。開始を押すと現在の音声セッションを再開します。",
-      "errorText": "接続を確立できませんでした。マイク権限を確認して再試行してください。",
-      "endedText": "音声セッションは終了しました。いつでも再開できます。",
-      "livekitLoadFailed": "LiveKit SDK の読み込みに失敗しました",
-      "invalidToken": "音声トークンの応答が無効です"
-    },
-    "masonry": {
-      "pageTitle": "Grok2API - Masonry",
-      "title": "Masonry",
-      "qualitySpeed": "速度",
-      "qualityQuality": "品質",
-      "modeRounds": "ラウンド",
-      "modeCycles": "サイクル",
-      "promptPlaceholder": "生成したい画像を説明してください。Enter で生成、Shift+Enter で改行します。",
-      "generate": "生成",
-      "stop": "停止",
-      "openImage": "画像を開く",
-      "statusReady": "準備完了",
-      "statusConnecting": "接続中...",
-      "statusGenerating": "生成中",
-      "statusCompleted": "完了",
-      "statusStopped": "停止済み",
-      "statusFailed": "失敗",
-      "statusSuccess": "生成成功",
-      "statusPartialFailure": "一部失敗",
-      "statusBatchFailed": "生成失敗",
-      "emptyTitle": "プロンプトから始めましょう",
-      "emptyText": "プロンプトを入力すると、画像がここに順番に表示されます。",
-      "roundLabel": "ラウンド {n}",
-      "batchFiltered": "フィルタ済み",
-      "errors": {
-        "enterPrompt": "プロンプトを入力してください",
-        "requestFailed": "リクエストに失敗しました",
-        "initFailed": "Masonry ページの初期化に失敗しました"
-      }
-    }
+    "continue": "続行"
   },
   "header": {
     "account": "アカウント管理",
@@ -363,60 +248,164 @@
         }
       },
       "fields": {
-        "appUrl": { "label": "APP ベース URL" },
-        "appKey": { "label": "APP アクセスパスワード" },
-        "apiKey": { "label": "API アクセスキー" },
-        "webuiEnabled": { "label": "WebUI を有効化" },
-        "webuiKey": { "label": "WebUI アクセスパスワード" },
-        "temporary": { "label": "一時セッション" },
-        "memory": { "label": "会話メモリ" },
-        "stream": { "label": "デフォルトのストリーミング" },
-        "thinking": { "label": "デフォルトの推論出力" },
-        "thinkingSummary": { "label": "思考要約出力" },
-        "dynamicStatsig": { "label": "動的 Statsig" },
-        "enableNsfw": { "label": "NSFW 生成を許可" },
-        "customInstruction": { "label": "グローバル補助指示" },
-        "imageFormat": { "label": "画像出力形式" },
-        "videoFormat": { "label": "動画出力形式" },
-        "basicInterval": { "label": "Basic 更新間隔（秒）" },
-        "superInterval": { "label": "Super 更新間隔（秒）" },
-        "heavyInterval": { "label": "Heavy 更新間隔（秒）" },
-        "usageConcurrency": { "label": "更新並列数" },
-        "onDemandMinInterval": { "label": "最小オンデマンド更新間隔（秒）" },
-        "nsfwConcurrency": { "label": "NSFW 有効化の並列数" },
-        "refreshConcurrency": { "label": "Usage 更新の並列数" },
-        "assetUploadConcurrency": { "label": "Asset アップロード並列数" },
-        "assetListConcurrency": { "label": "Asset 一覧取得並列数" },
-        "assetDeleteConcurrency": { "label": "Asset 削除並列数" },
-        "proxyMode": { "label": "プロキシモード" },
-        "proxyUrl": { "label": "プライマリプロキシ URL" },
-        "resourceProxyUrl": { "label": "リソースプロキシ URL" },
-        "proxyPool": { "label": "プライマリプロキシプール" },
-        "resourceProxyPool": { "label": "リソースプロキシプール" },
-        "skipSslVerify": { "label": "SSL 検証をスキップ" },
-        "clearanceMode": { "label": "Clearance モード" },
-        "browserFingerprint": { "label": "ブラウザフィンガープリント" },
-        "userAgent": { "label": "User-Agent" },
-        "cfCookies": { "label": "Cloudflare Cookies" },
-        "flaresolverrUrl": { "label": "FlareSolverr URL" },
-        "challengeTimeout": { "label": "チャレンジタイムアウト（秒）" },
-        "refreshInterval": { "label": "更新間隔（秒）" },
-        "maxRetries": { "label": "アカウント再試行上限" },
-        "retryCodes": { "label": "再試行対象のステータスコード" },
-        "resetSessionCodes": { "label": "セッション再構築対象のステータスコード" },
-        "chatTimeout": { "label": "チャットリクエストタイムアウト（秒）" },
-        "imageTimeout": { "label": "画像リクエストタイムアウト（秒）" },
-        "videoTimeout": { "label": "動画リクエストタイムアウト（秒）" },
-        "voiceTimeout": { "label": "音声リクエストタイムアウト（秒）" },
-        "nsfwTimeout": { "label": "NSFW 処理タイムアウト（秒）" },
-        "assetUploadTimeout": { "label": "Asset アップロードタイムアウト（秒）" },
-        "assetDownloadTimeout": { "label": "Asset ダウンロードタイムアウト（秒）" },
-        "assetListTimeout": { "label": "Asset 一覧タイムアウト（秒）" },
-        "assetDeleteTimeout": { "label": "Asset 削除タイムアウト（秒）" },
-        "streamTimeout": { "label": "ストリーミング待機タイムアウト（秒）" },
-        "interRoundWait": { "label": "ラウンド間待機時間（秒）" },
-        "fileLogLevel": { "label": "ファイルログレベル", "desc": "ログファイルに書き込む最低レベル。コンソールとは独立して設定できます。デフォルト: INFO。" },
-        "logMaxFiles": { "label": "ログ保持日数", "desc": "日次ローテーション時に保持するログファイルの最大数。デフォルト: 7。" }
+        "appUrl": {
+          "label": "APP ベース URL"
+        },
+        "appKey": {
+          "label": "APP アクセスパスワード"
+        },
+        "apiKey": {
+          "label": "API アクセスキー"
+        },
+        "temporary": {
+          "label": "一時セッション"
+        },
+        "memory": {
+          "label": "会話メモリ"
+        },
+        "stream": {
+          "label": "デフォルトのストリーミング"
+        },
+        "thinking": {
+          "label": "デフォルトの推論出力"
+        },
+        "thinkingSummary": {
+          "label": "思考要約出力"
+        },
+        "dynamicStatsig": {
+          "label": "動的 Statsig"
+        },
+        "enableNsfw": {
+          "label": "NSFW 生成を許可"
+        },
+        "customInstruction": {
+          "label": "グローバル補助指示"
+        },
+        "imageFormat": {
+          "label": "画像出力形式"
+        },
+        "videoFormat": {
+          "label": "動画出力形式"
+        },
+        "basicInterval": {
+          "label": "Basic 更新間隔（秒）"
+        },
+        "superInterval": {
+          "label": "Super 更新間隔（秒）"
+        },
+        "heavyInterval": {
+          "label": "Heavy 更新間隔（秒）"
+        },
+        "usageConcurrency": {
+          "label": "更新並列数"
+        },
+        "onDemandMinInterval": {
+          "label": "最小オンデマンド更新間隔（秒）"
+        },
+        "nsfwConcurrency": {
+          "label": "NSFW 有効化の並列数"
+        },
+        "refreshConcurrency": {
+          "label": "Usage 更新の並列数"
+        },
+        "assetUploadConcurrency": {
+          "label": "Asset アップロード並列数"
+        },
+        "assetListConcurrency": {
+          "label": "Asset 一覧取得並列数"
+        },
+        "assetDeleteConcurrency": {
+          "label": "Asset 削除並列数"
+        },
+        "proxyMode": {
+          "label": "プロキシモード"
+        },
+        "proxyUrl": {
+          "label": "プライマリプロキシ URL"
+        },
+        "resourceProxyUrl": {
+          "label": "リソースプロキシ URL"
+        },
+        "proxyPool": {
+          "label": "プライマリプロキシプール"
+        },
+        "resourceProxyPool": {
+          "label": "リソースプロキシプール"
+        },
+        "skipSslVerify": {
+          "label": "SSL 検証をスキップ"
+        },
+        "clearanceMode": {
+          "label": "Clearance モード"
+        },
+        "browserFingerprint": {
+          "label": "ブラウザフィンガープリント"
+        },
+        "userAgent": {
+          "label": "User-Agent"
+        },
+        "cfCookies": {
+          "label": "Cloudflare Cookies"
+        },
+        "flaresolverrUrl": {
+          "label": "FlareSolverr URL"
+        },
+        "challengeTimeout": {
+          "label": "チャレンジタイムアウト（秒）"
+        },
+        "refreshInterval": {
+          "label": "更新間隔（秒）"
+        },
+        "maxRetries": {
+          "label": "アカウント再試行上限"
+        },
+        "retryCodes": {
+          "label": "再試行対象のステータスコード"
+        },
+        "resetSessionCodes": {
+          "label": "セッション再構築対象のステータスコード"
+        },
+        "chatTimeout": {
+          "label": "チャットリクエストタイムアウト（秒）"
+        },
+        "imageTimeout": {
+          "label": "画像リクエストタイムアウト（秒）"
+        },
+        "videoTimeout": {
+          "label": "動画リクエストタイムアウト（秒）"
+        },
+        "voiceTimeout": {
+          "label": "音声リクエストタイムアウト（秒）"
+        },
+        "nsfwTimeout": {
+          "label": "NSFW 処理タイムアウト（秒）"
+        },
+        "assetUploadTimeout": {
+          "label": "Asset アップロードタイムアウト（秒）"
+        },
+        "assetDownloadTimeout": {
+          "label": "Asset ダウンロードタイムアウト（秒）"
+        },
+        "assetListTimeout": {
+          "label": "Asset 一覧タイムアウト（秒）"
+        },
+        "assetDeleteTimeout": {
+          "label": "Asset 削除タイムアウト（秒）"
+        },
+        "streamTimeout": {
+          "label": "ストリーミング待機タイムアウト（秒）"
+        },
+        "interRoundWait": {
+          "label": "ラウンド間待機時間（秒）"
+        },
+        "fileLogLevel": {
+          "label": "ファイルログレベル",
+          "desc": "ログファイルに書き込む最低レベル。コンソールとは独立して設定できます。デフォルト: INFO。"
+        },
+        "logMaxFiles": {
+          "label": "ログ保持日数",
+          "desc": "日次ローテーション時に保持するログファイルの最大数。デフォルト: 7。"
+        }
       }
     }
   },

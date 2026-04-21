@@ -1,6 +1,5 @@
 /* Grok2API — Auth module */
 const ADMIN_API = '/admin/api';
-const WEBUI_API = '/webui/api';
 
 const _ENC = new TextEncoder(), _DEC = new TextDecoder();
 const _SECRET = 'grok2api-admin-key';
@@ -42,11 +41,9 @@ function _keyStore(k) {
 }
 
 const adminKey = _keyStore('grok2api_admin_key');
-const webuiKey = _keyStore('grok2api_webui_key');
 
 async function verifyKey(url, key) {
   return (await fetch(url, { headers: key ? { Authorization: `Bearer ${key}` } : {} })).ok;
 }
 
-function adminLogout() { adminKey.clear(); webuiKey.clear(); location.href='/admin/login'; }
-function webuiLogout() { webuiKey.clear(); location.href='/webui/login'; }
+function adminLogout() { adminKey.clear(); location.href='/admin/login'; }

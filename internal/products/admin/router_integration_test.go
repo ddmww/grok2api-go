@@ -32,9 +32,9 @@ func (f fakeUpdateService) GetLatestReleaseInfo(context.Context, bool) updateche
 	return f.info
 }
 
-func intPtr(value int) *int          { return &value }
-func int64Ptr(value int64) *int64    { return &value }
-func stringPtr(value string) *string { return &value }
+func intPtr(value int) *int                          { return &value }
+func int64Ptr(value int64) *int64                    { return &value }
+func stringPtr(value string) *string                 { return &value }
 func statusPtr(value account.Status) *account.Status { return &value }
 
 func TestAdminRoutes(t *testing.T) {
@@ -391,6 +391,62 @@ func TestAdminRoutes(t *testing.T) {
 	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"enabled":1`) || !strings.Contains(resp.Body.String(), `"basic":1`) {
 		t.Fatalf("tokens summary failed: %d %s", resp.Code, resp.Body.String())
 	}
+
+	exportReqBody, _ := json.Marshal(map[string]any{
+		"format": "txt",
+		"filters": map[string]any{
+			"pool":   "basic",
+			"status": "all",
+			"nsfw":   "enabled",
+		},
+		"select_all_filtered": true,
+	})
+	exportReq := httptest.NewRequest(http.MethodPost, "/admin/api/tokens/export", bytes.NewReader(exportReqBody))
+	exportReq.Header.Set("Authorization", "Bearer admin-key")
+	exportReq.Header.Set("Content-Type", "application/json")
+	exportResp := httptest.NewRecorder()
+	router.ServeHTTP(exportResp, exportReq)
+	if exportResp.Code != http.StatusOK || !strings.Contains(exportResp.Body.String(), "token-3") {
+		t.Fatalf("token export txt failed: %d %s", exportResp.Code, exportResp.Body.String())
+	}
+	if !strings.Contains(exportResp.Header().Get("Content-Disposition"), ".txt") {
+		t.Fatalf("token export txt filename missing: %s", exportResp.Header().Get("Content-Disposition"))
+	}
+
+	exportReqBody, _ = json.Marshal(map[string]any{
+		"format": "json",
+		"tokens": []string{"token-3"},
+	})
+	exportReq = httptest.NewRequest(http.MethodPost, "/admin/api/tokens/export", bytes.NewReader(exportReqBody))
+	exportReq.Header.Set("Authorization", "Bearer admin-key")
+	exportReq.Header.Set("Content-Type", "application/json")
+	exportResp = httptest.NewRecorder()
+	router.ServeHTTP(exportResp, exportReq)
+	if exportResp.Code != http.StatusOK || !strings.Contains(exportResp.Body.String(), `"token":"token-3"`) {
+		t.Fatalf("token export json failed: %d %s", exportResp.Code, exportResp.Body.String())
+	}
+
+	resp = doJSON(http.MethodPost, "/admin/api/batch/nsfw", map[string]any{
+		"tokens": []string{"token-2"},
+	})
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"ok":1`) {
+		t.Fatalf("batch nsfw failed: %d %s", resp.Code, resp.Body.String())
+	}
+	nsfwRecords, err := repo.GetAccounts(context.Background(), []string{"token-2"})
+	if err != nil || len(nsfwRecords) != 1 {
+		t.Fatalf("get nsfw token failed: %v %#v", err, nsfwRecords)
+	}
+	foundNSFW := false
+	for _, tag := range nsfwRecords[0].Tags {
+		if tag == "nsfw" {
+			foundNSFW = true
+			break
+		}
+	}
+	if !foundNSFW {
+		t.Fatalf("batch nsfw should add nsfw tag: %#v", nsfwRecords[0])
+	}
+
 	sourceRecords, err := repo.GetAccounts(context.Background(), []string{"token-1"})
 	if err != nil || len(sourceRecords) != 1 {
 		t.Fatalf("get source token failed: %v %#v", err, sourceRecords)

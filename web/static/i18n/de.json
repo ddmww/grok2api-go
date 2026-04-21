@@ -8,122 +8,7 @@
     "adminTitle": "Administrationsbereich",
     "adminSubtitle": "Geben Sie das Administratorpasswort ein, um fortzufahren",
     "adminPlaceholder": "Administratorpasswort",
-    "continue": "Weiter",
-    "webuiPageTitle": "Grok2API - WebUI",
-    "webuiTitle": "WebUI",
-    "webuiSubtitle": "Geben Sie den Zugriffsschlüssel ein",
-    "webuiPlaceholder": "Zugriffsschlüssel",
-    "enter": "Öffnen",
-    "goToAdmin": "Zum Administrationsbereich"
-  },
-  "webui": {
-    "header": {
-      "chat": "Chat",
-      "masonry": "Masonry",
-      "chatkit": "ChatKit"
-    },
-    "chat": {
-      "pageTitle": "Grok2API - WebChat",
-      "sidebarTitle": "Chats",
-      "newChat": "Neuer Chat",
-      "toggleSidebar": "Seitenleiste umschalten",
-      "upload": "Datei hochladen",
-      "noSessions": "Noch keine Chats",
-      "untitled": "Neuer Chat",
-      "rename": "Umbenennen",
-      "delete": "Löschen",
-      "edit": "Bearbeiten",
-      "copy": "Kopieren",
-      "regenerate": "Neu generieren",
-      "like": "Gefällt mir",
-      "dislike": "Gefällt mir nicht",
-      "reasoning": "Denken",
-      "save": "Speichern",
-      "cancel": "Abbrechen",
-      "confirm": "Bestätigen",
-      "copySuccess": "Kopiert",
-      "renamePrompt": "Chat umbenennen",
-      "deleteConfirm": "Diesen Chat löschen?",
-      "modelLabel": "Modell",
-      "emptyTitle": "Grok Chat",
-      "empty": "Beginnen Sie eine neue Unterhaltung, indem Sie eine Nachricht senden.",
-      "promptPlaceholder": "Geben Sie Ihre Nachricht ein. Enter zum Senden, Shift+Enter für eine neue Zeile.",
-      "editPlaceholder": "Diese Nachricht bearbeiten",
-      "stop": "Stoppen",
-      "send": "Senden",
-      "statusReady": "Bereit",
-      "statusConnecting": "Verbinden...",
-      "statusThinking": "Denkt...",
-      "statusGenerating": "Generiert...",
-      "statusDone": "Abgeschlossen",
-      "statusStopped": "Gestoppt",
-      "statusFailed": "Fehlgeschlagen",
-      "statusInitFailed": "Initialisierung fehlgeschlagen",
-      "errors": {
-        "enterPrompt": "Bitte geben Sie eine Nachricht ein",
-        "imageRequired": "Für die Bildbearbeitung ist mindestens ein Referenzbild erforderlich",
-        "imageOnly": "Die Bildbearbeitung unterstützt nur Bild-Uploads",
-        "videoImageOnly": "Die Videogenerierung unterstützt nur Bild-Uploads als Referenz",
-        "requestFailed": "Anfrage fehlgeschlagen",
-        "initFailed": "Initialisierung der Chat-Seite fehlgeschlagen"
-      }
-    },
-    "chatkit": {
-      "pageTitle": "Grok2API - ChatKit",
-      "voiceLabel": "Stimme",
-      "personalityLabel": "Persönlichkeit",
-      "speedLabel": "Geschwindigkeit",
-      "start": "Start",
-      "pause": "Pause",
-      "mute": "Stumm",
-      "unmute": "Stummschaltung aufheben",
-      "newSession": "Neue Sitzung",
-      "statusIdle": "Nicht verbunden",
-      "statusConnecting": "Verbindung wird hergestellt",
-      "statusLive": "Live",
-      "statusMuted": "Stumm",
-      "statusPaused": "Pausiert",
-      "statusError": "Fehlgeschlagen",
-      "idleText": "Klicken Sie und autorisieren Sie den Zugriff, um über ChatKit-Sprachsitzungen eine Verbindung zu Grok Voice herzustellen.",
-      "connectingText": "Grok-Voice-Sitzung wird angefordert und mit LiveKit verbunden...",
-      "liveText": "Verbindung hergestellt. Sie können jetzt direkt mit Grok sprechen.",
-      "outputMutedText": "Der Lautsprecher ist stummgeschaltet, Sie können aber weiter sprechen.",
-      "pausedText": "Die Sitzung ist pausiert. Klicken Sie auf Start, um die aktuelle Sprachsitzung fortzusetzen.",
-      "errorText": "Die Verbindung konnte nicht hergestellt werden. Prüfen Sie den Mikrofonzugriff und versuchen Sie es erneut.",
-      "endedText": "Die Sprachsitzung wurde beendet. Sie können jederzeit neu starten.",
-      "livekitLoadFailed": "LiveKit-SDK konnte nicht geladen werden",
-      "invalidToken": "Ungültige Antwort für Sprach-Token"
-    },
-    "masonry": {
-      "pageTitle": "Grok2API - Masonry",
-      "title": "Masonry",
-      "qualitySpeed": "Tempo",
-      "qualityQuality": "Qualität",
-      "modeRounds": "Runden",
-      "modeCycles": "Zyklen",
-      "promptPlaceholder": "Beschreiben Sie das gewünschte Bild. Enter zum Generieren, Shift+Enter für eine neue Zeile.",
-      "generate": "Generieren",
-      "stop": "Stoppen",
-      "openImage": "Bild öffnen",
-      "statusReady": "Bereit",
-      "statusConnecting": "Verbinden...",
-      "statusGenerating": "Wird generiert",
-      "statusCompleted": "Abgeschlossen",
-      "statusStopped": "Gestoppt",
-      "statusFailed": "Fehlgeschlagen",
-      "statusSuccess": "Erfolgreich",
-      "statusPartialFailure": "Teilweise fehlgeschlagen",
-      "statusBatchFailed": "Fehlgeschlagen",
-      "emptyTitle": "Mit einem Prompt beginnen",
-      "emptyText": "Geben Sie einen Prompt ein und die Bilder erscheinen hier der Reihe nach.",
-      "roundLabel": "Runde {n}",
-      "batchFiltered": "Gefiltert",
-      "errors": {
-        "enterPrompt": "Bitte geben Sie einen Prompt ein",
-        "requestFailed": "Anfrage fehlgeschlagen",
-        "initFailed": "Initialisierung der Masonry-Seite fehlgeschlagen"
-      }
-    }
+    "continue": "Weiter"
   },
   "header": {
     "account": "Kontoverwaltung",
@@ -363,60 +248,164 @@
         }
       },
       "fields": {
-        "appUrl": { "label": "APP-Basis-URL" },
-        "appKey": { "label": "APP-Zugriffspasswort" },
-        "apiKey": { "label": "API-Zugriffsschlüssel" },
-        "webuiEnabled": { "label": "WebUI aktivieren" },
-        "webuiKey": { "label": "WebUI-Zugriffspasswort" },
-        "temporary": { "label": "Temporäre Sitzungen" },
-        "memory": { "label": "Konversationsspeicher" },
-        "stream": { "label": "Standard-Streaming" },
-        "thinking": { "label": "Standard-Ausgabe für Reasoning" },
-        "thinkingSummary": { "label": "Kompakte Reasoning-Ausgabe" },
-        "dynamicStatsig": { "label": "Dynamisches Statsig" },
-        "enableNsfw": { "label": "NSFW-Erzeugung zulassen" },
-        "customInstruction": { "label": "Globale Zusatzanweisung" },
-        "imageFormat": { "label": "Bildausgabeformat" },
-        "videoFormat": { "label": "Videoausgabeformat" },
-        "basicInterval": { "label": "Basic-Aktualisierungsintervall (s)" },
-        "superInterval": { "label": "Super-Aktualisierungsintervall (s)" },
-        "heavyInterval": { "label": "Heavy-Aktualisierungsintervall (s)" },
-        "usageConcurrency": { "label": "Aktualisierungs-Konkurrenz" },
-        "onDemandMinInterval": { "label": "Minimales On-Demand-Intervall (s)" },
-        "nsfwConcurrency": { "label": "Konkurrenz für NSFW-Aktivierung" },
-        "refreshConcurrency": { "label": "Usage-Aktualisierungskonkurrenz" },
-        "assetUploadConcurrency": { "label": "Asset-Upload-Konkurrenz" },
-        "assetListConcurrency": { "label": "Asset-Listen-Konkurrenz" },
-        "assetDeleteConcurrency": { "label": "Asset-Lösch-Konkurrenz" },
-        "proxyMode": { "label": "Proxy-Modus" },
-        "proxyUrl": { "label": "Primäre Proxy-URL" },
-        "resourceProxyUrl": { "label": "Ressourcen-Proxy-URL" },
-        "proxyPool": { "label": "Primärer Proxy-Pool" },
-        "resourceProxyPool": { "label": "Ressourcen-Proxy-Pool" },
-        "skipSslVerify": { "label": "SSL-Prüfung überspringen" },
-        "clearanceMode": { "label": "Clearance-Modus" },
-        "browserFingerprint": { "label": "Browser-Fingerprint" },
-        "userAgent": { "label": "User-Agent" },
-        "cfCookies": { "label": "Cloudflare-Cookies" },
-        "flaresolverrUrl": { "label": "FlareSolverr-URL" },
-        "challengeTimeout": { "label": "Challenge-Timeout (s)" },
-        "refreshInterval": { "label": "Aktualisierungsintervall (s)" },
-        "maxRetries": { "label": "Konto-Wiederholungslimit" },
-        "retryCodes": { "label": "Retry-Statuscodes" },
-        "resetSessionCodes": { "label": "Statuscodes für Sitzungsreset" },
-        "chatTimeout": { "label": "Chat-Timeout (s)" },
-        "imageTimeout": { "label": "Bild-Timeout (s)" },
-        "videoTimeout": { "label": "Video-Timeout (s)" },
-        "voiceTimeout": { "label": "Sprach-Timeout (s)" },
-        "nsfwTimeout": { "label": "NSFW-Timeout (s)" },
-        "assetUploadTimeout": { "label": "Asset-Upload-Timeout (s)" },
-        "assetDownloadTimeout": { "label": "Asset-Download-Timeout (s)" },
-        "assetListTimeout": { "label": "Asset-Listen-Timeout (s)" },
-        "assetDeleteTimeout": { "label": "Asset-Lösch-Timeout (s)" },
-        "streamTimeout": { "label": "Streaming-Leerlauf-Timeout (s)" },
-        "interRoundWait": { "label": "Wartezeit zwischen Runden (s)" },
-        "fileLogLevel": { "label": "Datei-Protokollebene", "desc": "Mindeststufe für Protokolldateien, unabhängig von der Konsole konfigurierbar. Standard: INFO." },
-        "logMaxFiles": { "label": "Protokoll-Aufbewahrung (Tage)", "desc": "Maximale Anzahl täglicher Protokolldateien bei der Rotation. Standard: 7." }
+        "appUrl": {
+          "label": "APP-Basis-URL"
+        },
+        "appKey": {
+          "label": "APP-Zugriffspasswort"
+        },
+        "apiKey": {
+          "label": "API-Zugriffsschlüssel"
+        },
+        "temporary": {
+          "label": "Temporäre Sitzungen"
+        },
+        "memory": {
+          "label": "Konversationsspeicher"
+        },
+        "stream": {
+          "label": "Standard-Streaming"
+        },
+        "thinking": {
+          "label": "Standard-Ausgabe für Reasoning"
+        },
+        "thinkingSummary": {
+          "label": "Kompakte Reasoning-Ausgabe"
+        },
+        "dynamicStatsig": {
+          "label": "Dynamisches Statsig"
+        },
+        "enableNsfw": {
+          "label": "NSFW-Erzeugung zulassen"
+        },
+        "customInstruction": {
+          "label": "Globale Zusatzanweisung"
+        },
+        "imageFormat": {
+          "label": "Bildausgabeformat"
+        },
+        "videoFormat": {
+          "label": "Videoausgabeformat"
+        },
+        "basicInterval": {
+          "label": "Basic-Aktualisierungsintervall (s)"
+        },
+        "superInterval": {
+          "label": "Super-Aktualisierungsintervall (s)"
+        },
+        "heavyInterval": {
+          "label": "Heavy-Aktualisierungsintervall (s)"
+        },
+        "usageConcurrency": {
+          "label": "Aktualisierungs-Konkurrenz"
+        },
+        "onDemandMinInterval": {
+          "label": "Minimales On-Demand-Intervall (s)"
+        },
+        "nsfwConcurrency": {
+          "label": "Konkurrenz für NSFW-Aktivierung"
+        },
+        "refreshConcurrency": {
+          "label": "Usage-Aktualisierungskonkurrenz"
+        },
+        "assetUploadConcurrency": {
+          "label": "Asset-Upload-Konkurrenz"
+        },
+        "assetListConcurrency": {
+          "label": "Asset-Listen-Konkurrenz"
+        },
+        "assetDeleteConcurrency": {
+          "label": "Asset-Lösch-Konkurrenz"
+        },
+        "proxyMode": {
+          "label": "Proxy-Modus"
+        },
+        "proxyUrl": {
+          "label": "Primäre Proxy-URL"
+        },
+        "resourceProxyUrl": {
+          "label": "Ressourcen-Proxy-URL"
+        },
+        "proxyPool": {
+          "label": "Primärer Proxy-Pool"
+        },
+        "resourceProxyPool": {
+          "label": "Ressourcen-Proxy-Pool"
+        },
+        "skipSslVerify": {
+          "label": "SSL-Prüfung überspringen"
+        },
+        "clearanceMode": {
+          "label": "Clearance-Modus"
+        },
+        "browserFingerprint": {
+          "label": "Browser-Fingerprint"
+        },
+        "userAgent": {
+          "label": "User-Agent"
+        },
+        "cfCookies": {
+          "label": "Cloudflare-Cookies"
+        },
+        "flaresolverrUrl": {
+          "label": "FlareSolverr-URL"
+        },
+        "challengeTimeout": {
+          "label": "Challenge-Timeout (s)"
+        },
+        "refreshInterval": {
+          "label": "Aktualisierungsintervall (s)"
+        },
+        "maxRetries": {
+          "label": "Konto-Wiederholungslimit"
+        },
+        "retryCodes": {
+          "label": "Retry-Statuscodes"
+        },
+        "resetSessionCodes": {
+          "label": "Statuscodes für Sitzungsreset"
+        },
+        "chatTimeout": {
+          "label": "Chat-Timeout (s)"
+        },
+        "imageTimeout": {
+          "label": "Bild-Timeout (s)"
+        },
+        "videoTimeout": {
+          "label": "Video-Timeout (s)"
+        },
+        "voiceTimeout": {
+          "label": "Sprach-Timeout (s)"
+        },
+        "nsfwTimeout": {
+          "label": "NSFW-Timeout (s)"
+        },
+        "assetUploadTimeout": {
+          "label": "Asset-Upload-Timeout (s)"
+        },
+        "assetDownloadTimeout": {
+          "label": "Asset-Download-Timeout (s)"
+        },
+        "assetListTimeout": {
+          "label": "Asset-Listen-Timeout (s)"
+        },
+        "assetDeleteTimeout": {
+          "label": "Asset-Lösch-Timeout (s)"
+        },
+        "streamTimeout": {
+          "label": "Streaming-Leerlauf-Timeout (s)"
+        },
+        "interRoundWait": {
+          "label": "Wartezeit zwischen Runden (s)"
+        },
+        "fileLogLevel": {
+          "label": "Datei-Protokollebene",
+          "desc": "Mindeststufe für Protokolldateien, unabhängig von der Konsole konfigurierbar. Standard: INFO."
+        },
+        "logMaxFiles": {
+          "label": "Protokoll-Aufbewahrung (Tage)",
+          "desc": "Maximale Anzahl täglicher Protokolldateien bei der Rotation. Standard: 7."
+        }
       }
     }
   },

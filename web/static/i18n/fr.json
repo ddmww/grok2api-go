@@ -8,122 +8,7 @@
     "adminTitle": "Panneau d’administration",
     "adminSubtitle": "Saisissez le mot de passe administrateur pour continuer",
     "adminPlaceholder": "Mot de passe administrateur",
-    "continue": "Continuer",
-    "webuiPageTitle": "Grok2API - WebUI",
-    "webuiTitle": "WebUI",
-    "webuiSubtitle": "Saisissez la clé d’accès",
-    "webuiPlaceholder": "Clé d’accès",
-    "enter": "Entrer",
-    "goToAdmin": "Accéder au panneau d’administration"
-  },
-  "webui": {
-    "header": {
-      "chat": "Chat",
-      "masonry": "Masonry",
-      "chatkit": "ChatKit"
-    },
-    "chat": {
-      "pageTitle": "Grok2API - WebChat",
-      "sidebarTitle": "Chats",
-      "newChat": "Nouveau chat",
-      "toggleSidebar": "Basculer la barre latérale",
-      "upload": "Téléverser un fichier",
-      "noSessions": "Aucun chat pour le moment",
-      "untitled": "Nouveau chat",
-      "rename": "Renommer",
-      "delete": "Supprimer",
-      "edit": "Modifier",
-      "copy": "Copier",
-      "regenerate": "Régénérer",
-      "like": "J’aime",
-      "dislike": "Je n’aime pas",
-      "reasoning": "Réflexion",
-      "save": "Enregistrer",
-      "cancel": "Annuler",
-      "confirm": "Confirmer",
-      "copySuccess": "Copié",
-      "renamePrompt": "Renommer le chat",
-      "deleteConfirm": "Supprimer ce chat ?",
-      "modelLabel": "Modèle",
-      "emptyTitle": "Grok Chat",
-      "empty": "Commencez une nouvelle conversation en envoyant un message.",
-      "promptPlaceholder": "Saisissez votre message. Entrée pour envoyer, Shift+Entrée pour une nouvelle ligne.",
-      "editPlaceholder": "Modifier ce message",
-      "stop": "Arrêter",
-      "send": "Envoyer",
-      "statusReady": "Prêt",
-      "statusConnecting": "Connexion...",
-      "statusThinking": "Réflexion...",
-      "statusGenerating": "Génération...",
-      "statusDone": "Terminé",
-      "statusStopped": "Arrêté",
-      "statusFailed": "Échec",
-      "statusInitFailed": "Échec de l’initialisation",
-      "errors": {
-        "enterPrompt": "Veuillez saisir un message",
-        "imageRequired": "L’édition d’image nécessite au moins une image de référence",
-        "imageOnly": "L’édition d’image ne prend en charge que les téléversements d’images",
-        "videoImageOnly": "La génération vidéo n’accepte que les images comme référence",
-        "requestFailed": "Échec de la requête",
-        "initFailed": "Échec de l’initialisation de la page de chat"
-      }
-    },
-    "chatkit": {
-      "pageTitle": "Grok2API - ChatKit",
-      "voiceLabel": "Voix",
-      "personalityLabel": "Personnalité",
-      "speedLabel": "Vitesse",
-      "start": "Démarrer",
-      "pause": "Pause",
-      "mute": "Muet",
-      "unmute": "Réactiver le son",
-      "newSession": "Nouvelle session",
-      "statusIdle": "Non connecté",
-      "statusConnecting": "Connexion",
-      "statusLive": "En direct",
-      "statusMuted": "Muet",
-      "statusPaused": "En pause",
-      "statusError": "Échec",
-      "idleText": "Cliquez et autorisez l’accès pour vous connecter à Grok Voice via les sessions vocales ChatKit.",
-      "connectingText": "Demande d’une session vocale Grok et connexion à LiveKit...",
-      "liveText": "Connexion établie. Vous pouvez maintenant parler directement avec Grok.",
-      "outputMutedText": "Le haut-parleur est coupé, mais vous pouvez continuer à parler.",
-      "pausedText": "La session est en pause. Cliquez sur démarrer pour reprendre la session vocale en cours.",
-      "errorText": "La connexion n’a pas abouti. Vérifiez l’accès au micro puis réessayez.",
-      "endedText": "La session vocale est terminée. Vous pouvez en démarrer une nouvelle à tout moment.",
-      "livekitLoadFailed": "Échec du chargement du SDK LiveKit",
-      "invalidToken": "Réponse de jeton vocal invalide"
-    },
-    "masonry": {
-      "pageTitle": "Grok2API - Masonry",
-      "title": "Masonry",
-      "qualitySpeed": "Vitesse",
-      "qualityQuality": "Qualité",
-      "modeRounds": "Rounds",
-      "modeCycles": "Cycles",
-      "promptPlaceholder": "Décrivez l’image souhaitée. Entrée pour générer, Shift+Entrée pour une nouvelle ligne.",
-      "generate": "Générer",
-      "stop": "Arrêter",
-      "openImage": "Ouvrir l’image",
-      "statusReady": "Prêt",
-      "statusConnecting": "Connexion...",
-      "statusGenerating": "Génération",
-      "statusCompleted": "Terminé",
-      "statusStopped": "Arrêté",
-      "statusFailed": "Échec",
-      "statusSuccess": "Succès",
-      "statusPartialFailure": "Échec partiel",
-      "statusBatchFailed": "Échec",
-      "emptyTitle": "Commencez avec un prompt",
-      "emptyText": "Saisissez un prompt et les images apparaîtront ici dans l’ordre.",
-      "roundLabel": "Round {n}",
-      "batchFiltered": "Filtré",
-      "errors": {
-        "enterPrompt": "Veuillez saisir un prompt",
-        "requestFailed": "Échec de la requête",
-        "initFailed": "Échec de l’initialisation de la page Masonry"
-      }
-    }
+    "continue": "Continuer"
   },
   "header": {
     "account": "Gestion des Comptes",
@@ -363,60 +248,164 @@
         }
       },
       "fields": {
-        "appUrl": { "label": "URL de base APP" },
-        "appKey": { "label": "Mot de passe d’accès APP" },
-        "apiKey": { "label": "Clé d’accès API" },
-        "webuiEnabled": { "label": "Activer WebUI" },
-        "webuiKey": { "label": "Mot de passe d’accès WebUI" },
-        "temporary": { "label": "Sessions temporaires" },
-        "memory": { "label": "Mémoire conversationnelle" },
-        "stream": { "label": "Streaming par défaut" },
-        "thinking": { "label": "Sortie de raisonnement par défaut" },
-        "thinkingSummary": { "label": "Raisonnement condensé" },
-        "dynamicStatsig": { "label": "Statsig dynamique" },
-        "enableNsfw": { "label": "Autoriser la génération NSFW" },
-        "customInstruction": { "label": "Instruction globale supplémentaire" },
-        "imageFormat": { "label": "Format de sortie image" },
-        "videoFormat": { "label": "Format de sortie vidéo" },
-        "basicInterval": { "label": "Intervalle d’actualisation Basic (s)" },
-        "superInterval": { "label": "Intervalle d’actualisation Super (s)" },
-        "heavyInterval": { "label": "Intervalle d’actualisation Heavy (s)" },
-        "usageConcurrency": { "label": "Concurrence d’actualisation" },
-        "onDemandMinInterval": { "label": "Intervalle minimal à la demande (s)" },
-        "nsfwConcurrency": { "label": "Concurrence d’activation NSFW" },
-        "refreshConcurrency": { "label": "Concurrence d’actualisation Usage" },
-        "assetUploadConcurrency": { "label": "Concurrence d’envoi Asset" },
-        "assetListConcurrency": { "label": "Concurrence de listage Asset" },
-        "assetDeleteConcurrency": { "label": "Concurrence de suppression Asset" },
-        "proxyMode": { "label": "Mode proxy" },
-        "proxyUrl": { "label": "URL du proxy principal" },
-        "resourceProxyUrl": { "label": "URL du proxy de ressources" },
-        "proxyPool": { "label": "Pool de proxys principal" },
-        "resourceProxyPool": { "label": "Pool de proxys de ressources" },
-        "skipSslVerify": { "label": "Ignorer la vérification SSL" },
-        "clearanceMode": { "label": "Mode Clearance" },
-        "browserFingerprint": { "label": "Empreinte navigateur" },
-        "userAgent": { "label": "User-Agent" },
-        "cfCookies": { "label": "Cookies Cloudflare" },
-        "flaresolverrUrl": { "label": "URL FlareSolverr" },
-        "challengeTimeout": { "label": "Délai du challenge (s)" },
-        "refreshInterval": { "label": "Intervalle d’actualisation (s)" },
-        "maxRetries": { "label": "Limite de reprise de compte" },
-        "retryCodes": { "label": "Codes d’état de reprise" },
-        "resetSessionCodes": { "label": "Codes d’état de réinitialisation de session" },
-        "chatTimeout": { "label": "Délai d’attente chat (s)" },
-        "imageTimeout": { "label": "Délai d’attente image (s)" },
-        "videoTimeout": { "label": "Délai d’attente vidéo (s)" },
-        "voiceTimeout": { "label": "Délai d’attente voix (s)" },
-        "nsfwTimeout": { "label": "Délai d’attente NSFW (s)" },
-        "assetUploadTimeout": { "label": "Délai d’envoi Asset (s)" },
-        "assetDownloadTimeout": { "label": "Délai de téléchargement Asset (s)" },
-        "assetListTimeout": { "label": "Délai de listage Asset (s)" },
-        "assetDeleteTimeout": { "label": "Délai de suppression Asset (s)" },
-        "streamTimeout": { "label": "Délai d’inactivité du streaming (s)" },
-        "interRoundWait": { "label": "Attente inter-cycle (s)" },
-        "fileLogLevel": { "label": "Niveau de journal fichier", "desc": "Niveau minimum écrit dans les fichiers de journal, configurable indépendamment de la console. Par défaut : INFO." },
-        "logMaxFiles": { "label": "Rétention des journaux (jours)", "desc": "Nombre maximum de fichiers de journal quotidiens conservés lors de la rotation. Par défaut : 7." }
+        "appUrl": {
+          "label": "URL de base APP"
+        },
+        "appKey": {
+          "label": "Mot de passe d’accès APP"
+        },
+        "apiKey": {
+          "label": "Clé d’accès API"
+        },
+        "temporary": {
+          "label": "Sessions temporaires"
+        },
+        "memory": {
+          "label": "Mémoire conversationnelle"
+        },
+        "stream": {
+          "label": "Streaming par défaut"
+        },
+        "thinking": {
+          "label": "Sortie de raisonnement par défaut"
+        },
+        "thinkingSummary": {
+          "label": "Raisonnement condensé"
+        },
+        "dynamicStatsig": {
+          "label": "Statsig dynamique"
+        },
+        "enableNsfw": {
+          "label": "Autoriser la génération NSFW"
+        },
+        "customInstruction": {
+          "label": "Instruction globale supplémentaire"
+        },
+        "imageFormat": {
+          "label": "Format de sortie image"
+        },
+        "videoFormat": {
+          "label": "Format de sortie vidéo"
+        },
+        "basicInterval": {
+          "label": "Intervalle d’actualisation Basic (s)"
+        },
+        "superInterval": {
+          "label": "Intervalle d’actualisation Super (s)"
+        },
+        "heavyInterval": {
+          "label": "Intervalle d’actualisation Heavy (s)"
+        },
+        "usageConcurrency": {
+          "label": "Concurrence d’actualisation"
+        },
+        "onDemandMinInterval": {
+          "label": "Intervalle minimal à la demande (s)"
+        },
+        "nsfwConcurrency": {
+          "label": "Concurrence d’activation NSFW"
+        },
+        "refreshConcurrency": {
+          "label": "Concurrence d’actualisation Usage"
+        },
+        "assetUploadConcurrency": {
+          "label": "Concurrence d’envoi Asset"
+        },
+        "assetListConcurrency": {
+          "label": "Concurrence de listage Asset"
+        },
+        "assetDeleteConcurrency": {
+          "label": "Concurrence de suppression Asset"
+        },
+        "proxyMode": {
+          "label": "Mode proxy"
+        },
+        "proxyUrl": {
+          "label": "URL du proxy principal"
+        },
+        "resourceProxyUrl": {
+          "label": "URL du proxy de ressources"
+        },
+        "proxyPool": {
+          "label": "Pool de proxys principal"
+        },
+        "resourceProxyPool": {
+          "label": "Pool de proxys de ressources"
+        },
+        "skipSslVerify": {
+          "label": "Ignorer la vérification SSL"
+        },
+        "clearanceMode": {
+          "label": "Mode Clearance"
+        },
+        "browserFingerprint": {
+          "label": "Empreinte navigateur"
+        },
+        "userAgent": {
+          "label": "User-Agent"
+        },
+        "cfCookies": {
+          "label": "Cookies Cloudflare"
+        },
+        "flaresolverrUrl": {
+          "label": "URL FlareSolverr"
+        },
+        "challengeTimeout": {
+          "label": "Délai du challenge (s)"
+        },
+        "refreshInterval": {
+          "label": "Intervalle d’actualisation (s)"
+        },
+        "maxRetries": {
+          "label": "Limite de reprise de compte"
+        },
+        "retryCodes": {
+          "label": "Codes d’état de reprise"
+        },
+        "resetSessionCodes": {
+          "label": "Codes d’état de réinitialisation de session"
+        },
+        "chatTimeout": {
+          "label": "Délai d’attente chat (s)"
+        },
+        "imageTimeout": {
+          "label": "Délai d’attente image (s)"
+        },
+        "videoTimeout": {
+          "label": "Délai d’attente vidéo (s)"
+        },
+        "voiceTimeout": {
+          "label": "Délai d’attente voix (s)"
+        },
+        "nsfwTimeout": {
+          "label": "Délai d’attente NSFW (s)"
+        },
+        "assetUploadTimeout": {
+          "label": "Délai d’envoi Asset (s)"
+        },
+        "assetDownloadTimeout": {
+          "label": "Délai de téléchargement Asset (s)"
+        },
+        "assetListTimeout": {
+          "label": "Délai de listage Asset (s)"
+        },
+        "assetDeleteTimeout": {
+          "label": "Délai de suppression Asset (s)"
+        },
+        "streamTimeout": {
+          "label": "Délai d’inactivité du streaming (s)"
+        },
+        "interRoundWait": {
+          "label": "Attente inter-cycle (s)"
+        },
+        "fileLogLevel": {
+          "label": "Niveau de journal fichier",
+          "desc": "Niveau minimum écrit dans les fichiers de journal, configurable indépendamment de la console. Par défaut : INFO."
+        },
+        "logMaxFiles": {
+          "label": "Rétention des journaux (jours)",
+          "desc": "Nombre maximum de fichiers de journal quotidiens conservés lors de la rotation. Par défaut : 7."
+        }
       }
     }
   },

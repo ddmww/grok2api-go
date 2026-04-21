@@ -58,19 +58,23 @@ func main() {
 		panic(err)
 	}
 	proxyRuntime := proxy.NewRuntime(cfg)
+	clearanceScheduler := proxy.NewClearanceScheduler(cfg, proxyRuntime)
+	clearanceScheduler.Start()
+	defer clearanceScheduler.Stop()
 	xaiClient := xai.NewClient(cfg, proxyRuntime)
 	refreshService := refresh.New(repo, runtime, cfg, xaiClient)
 	refreshService.Start()
 	defer refreshService.Stop()
 
 	state := &app.State{
-		Config:  cfg,
-		Repo:    repo,
-		Runtime: runtime,
-		Refresh: refreshService,
-		Proxy:   proxyRuntime,
-		XAI:     xaiClient,
-		Tasks:   tasks.NewStore(),
+		Config:         cfg,
+		Repo:           repo,
+		Runtime:        runtime,
+		Refresh:        refreshService,
+		Proxy:          proxyRuntime,
+		ProxyClearance: clearanceScheduler,
+		XAI:            xaiClient,
+		Tasks:          tasks.NewStore(),
 	}
 
 	gin.SetMode(gin.ReleaseMode)
