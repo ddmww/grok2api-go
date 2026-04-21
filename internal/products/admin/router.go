@@ -949,12 +949,24 @@ func parseBatchSelectionPayload(c *gin.Context) (batchSelectionPayload, error) {
 func resolveBatchSelection(ctx context.Context, repo account.Repository, payload batchSelectionPayload, fallbackManageable bool) ([]string, error) {
 	tokens := sanitizeTokens(payload.Tokens)
 	if payload.SelectAllFiltered {
+		pool := strings.TrimSpace(payload.Filters.Pool)
+		if strings.EqualFold(pool, "all") {
+			pool = ""
+		}
+		status := strings.TrimSpace(payload.Filters.Status)
+		if strings.EqualFold(status, "all") {
+			status = ""
+		}
+		nsfw := strings.TrimSpace(payload.Filters.NSFW)
+		if strings.EqualFold(nsfw, "all") {
+			nsfw = ""
+		}
 		return listTokensByQuery(ctx, repo, account.ListQuery{
 			Page:           1,
 			PageSize:       2000,
-			Pool:           strings.TrimSpace(payload.Filters.Pool),
-			Status:         account.Status(strings.TrimSpace(payload.Filters.Status)),
-			NSFW:           strings.TrimSpace(payload.Filters.NSFW),
+			Pool:           pool,
+			Status:         account.Status(status),
+			NSFW:           nsfw,
 			IncludeDeleted: false,
 			SortBy:         "created_at",
 			SortDesc:       true,
