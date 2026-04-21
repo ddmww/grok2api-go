@@ -429,22 +429,16 @@
       align-items:flex-start;
       gap:8px;
       width:100%;
-      flex-wrap:nowrap;
+      flex-wrap:wrap;
     }
     .filter-chip-list {
       display:flex;
       align-items:center;
       gap:6px;
-      flex-wrap:nowrap;
+      flex-wrap:wrap;
       min-width:0;
       flex:1 1 auto;
-      overflow-x:auto;
-      overflow-y:hidden;
-      scrollbar-width:none;
-      -ms-overflow-style:none;
-    }
-    .filter-chip-list::-webkit-scrollbar {
-      display:none;
+      overflow:visible;
     }
     .toolbar-dropdown-panel .filter-label {
       width:34px;
@@ -465,6 +459,54 @@
       padding:0 4px;
       font-size:10px;
     }
+    .inline-progress {
+      display:none;
+      align-items:center;
+      gap:12px;
+      margin:0 0 14px;
+      padding:10px 14px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid #efe6d9;
+    }
+    .inline-progress.is-visible { display:flex; }
+    .inline-progress-copy {
+      min-width:0;
+      flex:1 1 auto;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .inline-progress-label {
+      font-size:12px;
+      font-weight:600;
+      color:#171717;
+      line-height:1.4;
+    }
+    .inline-progress-track {
+      width:100%;
+      height:6px;
+      border-radius:999px;
+      overflow:hidden;
+      background:#f2ece3;
+    }
+    .inline-progress-fill {
+      width:0%;
+      height:100%;
+      background:#111;
+      transition:width .18s ease;
+    }
+    .inline-progress-count {
+      flex:0 0 auto;
+      min-width:64px;
+      text-align:right;
+      font-size:12px;
+      font-weight:600;
+      color:#8a8a8a;
+      font-variant-numeric:tabular-nums;
+    }
+    .inline-progress.is-success .inline-progress-fill { background:#2f9e62; }
+    .inline-progress.is-error .inline-progress-fill { background:#c45a4f; }
     @media (max-width: 720px) {
       .toolbar-dropdown-panel {
         right:-8px;
@@ -1090,6 +1132,15 @@
       </select>
     </div>
   </div>
+  <div class="inline-progress" id="inline-progress">
+    <div class="inline-progress-copy">
+      <div class="inline-progress-label" id="inline-progress-label">处理中…</div>
+      <div class="inline-progress-track">
+        <div class="inline-progress-fill" id="inline-progress-fill"></div>
+      </div>
+    </div>
+    <div class="inline-progress-count" id="inline-progress-count">0 / 0</div>
+  </div>
 
   <!-- Table -->
   <div class="table-card table-freeze-last">
@@ -1237,6 +1288,57 @@ const refreshingTokens = new Set();
 let _cb = null;
 let _editingToken = '';
 let _filterMenuBound = false;
+let _inlineProgressTimer = null;
+
+function setInlineProgressVisible(visible) {
+  const el = document.getElementById('inline-progress');
+  if (!el) return;
+  el.classList.toggle('is-visible', visible);
+}
+
+function showInlineProgress(label, done = 0, total = 0) {
+  const el = document.getElementById('inline-progress');
+  const labelEl = document.getElementById('inline-progress-label');
+  const fillEl = document.getElementById('inline-progress-fill');
+  const countEl = document.getElementById('inline-progress-count');
+  if (!el || !labelEl || !fillEl || !countEl) return;
+  clearTimeout(_inlineProgressTimer);
+  el.classList.remove('is-success', 'is-error');
+  labelEl.textContent = label;
+  const pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
+  fillEl.style.width = `${pct}%`;
+  countEl.textContent = total > 0 ? `${done} / ${total}` : (done > 0 ? `${done}` : '处理中');
+  setInlineProgressVisible(true);
+}
+
+function updateInlineProgress(done, total, label = '') {
+  const labelEl = document.getElementById('inline-progress-label');
+  const fillEl = document.getElementById('inline-progress-fill');
+  const countEl = document.getElementById('inline-progress-count');
+  if (!labelEl || !fillEl || !countEl) return;
+  if (label) labelEl.textContent = label;
+  const pct = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0;
+  fillEl.style.width = `${pct}%`;
+  countEl.textContent = total > 0 ? `${done} / ${total}` : `${done}`;
+}
+
+function finishInlineProgress(label, type = 'success') {
+  const el = document.getElementById('inline-progress');
+  const labelEl = document.getElementById('inline-progress-label');
+  const fillEl = document.getElementById('inline-progress-fill');
+  const countEl = document.getElementById('inline-progress-count');
+  if (!el || !labelEl || !fillEl || !countEl) return;
+  el.classList.remove('is-success', 'is-error');
+  el.classList.add(type === 'error' ? 'is-error' : 'is-success');
+  labelEl.textContent = label;
+  fillEl.style.width = '100%';
+  countEl.textContent = '';
+  clearTimeout(_inlineProgressTimer);
+  _inlineProgressTimer = setTimeout(() => {
+    setInlineProgressVisible(false);
+    el.classList.remove('is-success', 'is-error');
+  }, 3000);
+}
 
 function tr(key, params, fallback) {
   const value = t(key, params);
@@ -1351,24 +1453,13 @@ function renderModels() {
   ];
   const total = groups.reduce((sum, group) => sum + ((availableModels[group.key] || []).length), 0);
   totalEl.textContent = total;
-
-  if (!activeModelPools.length) {
-    pools.innerHTML = `<span class="model-empty">${tr('account.modelEmptyPools', null, '当前没有可管理账号，暂时无法判断可用模型。')}</span>`;
-    subtitle.textContent = tr('account.modelPanelEmpty', null, '导入并启用账号后，这里会自动按池子显示可用模型。');
-  } else {
-    pools.innerHTML = activeModelPools.map(pool => `
-      <span class="model-pool-chip">
-        <span>${xe(poolLabel(pool))}</span>
-        <span class="model-pool-chip-count">${activeModelPoolCounts?.[pool] ?? 0}</span>
-      </span>
-    `).join('');
-    subtitle.textContent = tr('account.modelPanelHint', null, '模型列表会跟随当前可用账号池自动变化，basic 只显示 basic 可调用模型。');
-  }
+  pools.innerHTML = '';
+  subtitle.textContent = tr('account.modelPanelStaticHint', null, '默认展示当前版本支持的全部模型；点击模型名即可复制真实模型 ID。');
 
   grid.innerHTML = groups.map(group => {
     const items = availableModels[group.key] || [];
     return `
-      <section class="model-group">
+          <section class="model-group">
         <div class="model-group-head">
           <div class="model-group-title">${xe(group.title)}</div>
           <div class="model-group-count">${items.length}</div>
@@ -1382,7 +1473,7 @@ function renderModels() {
                 <span class="model-chip-badge">${xe(poolLabel(item.pool || 'basic'))}</span>
               </div>
             </article>
-          `).join('') : `<div class="model-empty">${tr('account.modelGroupEmpty', null, '当前账号池下暂无此类模型')}</div>`}
+          `).join('') : `<div class="model-empty">${tr('account.modelGroupStaticEmpty', null, '当前版本暂无此类模型')}</div>`}
         </div>
       </section>
     `;
@@ -1722,6 +1813,19 @@ function currentQueryParams(overrides = {}) {
   if ((overrides.nsfw ?? curNsfw) !== 'all') params.set('nsfw', overrides.nsfw ?? curNsfw);
   return params;
 }
+function currentSelectionPayload() {
+  if (selectAllFiltered) {
+    return {
+      select_all_filtered: true,
+      filters: {
+        pool: curPool,
+        status: curStatus,
+        nsfw: curNsfw,
+      },
+    };
+  }
+  return { tokens: [...sel] };
+}
 async function loadAccountView(options = {}) {
   const includeModels = options.includeModels === true;
   const query = currentQueryParams().toString();
@@ -1742,8 +1846,8 @@ async function loadAccountView(options = {}) {
   if (includeModels) {
     const modelsData = results.shift();
     availableModels = modelsData.groups || { chat: [], image: [], image_edit: [], video: [] };
-    activeModelPools = Array.isArray(modelsData.pools?.active) ? modelsData.pools.active : [];
-    activeModelPoolCounts = modelsData.pools?.counts || {};
+    activeModelPools = [];
+    activeModelPoolCounts = {};
   }
 }
 function handleLoadError(e) {
@@ -1872,11 +1976,17 @@ async function doImport() {
     if (!total) return showToast(tr('account.jsonEmpty', null, 'JSON 文件中没有可导入的 Token'), 'error');
     try {
       showToast(tr('account.importing', { n: total }, `正在导入 ${total} 个账户…`), 'info');
+      showInlineProgress(tr('account.importing', { n: total }, `正在导入 ${total} 个账户…`), 0, 1);
       await _api('POST', '/tokens', parsed);
+      updateInlineProgress(1, 1);
       closeModal('modal-import-file');
+      finishInlineProgress(tr('account.importJsonDone', { n: total }, `导入完成，共 ${total} 个`), 'success');
       showToast(tr('account.importJsonDone', { n: total }, `导入完成，共 ${total} 个`), 'success');
       load();
-    } catch (e) { showToast(`${tr('account.importFailed', null, '导入失败')}: ${e.message}`, 'error'); }
+    } catch (e) {
+      finishInlineProgress(`${tr('account.importFailed', null, '导入失败')}: ${e.message}`, 'error');
+      showToast(`${tr('account.importFailed', null, '导入失败')}: ${e.message}`, 'error');
+    }
   } else {
     // TXT 格式: 每行一个 token
     const pool = document.getElementById('import-file-pool').value;
@@ -1927,21 +2037,29 @@ async function saveTokens(pool, newToks, modalId, pendingMessage, successPrefix,
   const unique = [...new Set(newToks)];
   try {
     showToast(pendingMessage, 'info');
+    showInlineProgress(pendingMessage, 0, unique.length);
     let totalCount = 0;
     let totalSkipped = 0;
+    let processed = 0;
     for (let i = 0; i < unique.length; i += TOKEN_IMPORT_CHUNK_SIZE) {
       const chunk = unique.slice(i, i + TOKEN_IMPORT_CHUNK_SIZE);
       const d = await _api('POST', '/tokens/add', { pool, tokens: chunk });
       totalCount += Number(d.count || 0);
       totalSkipped += Number(d.skipped || 0);
+      processed += chunk.length;
+      updateInlineProgress(processed, unique.length);
     }
     closeModal(modalId);
     const msg = totalSkipped
       ? tr('account.saveResultSkipped', { prefix: successPrefix, count: totalCount, skipped: totalSkipped }, `${successPrefix}，新增 ${totalCount}，已存在跳过 ${totalSkipped}`)
       : tr('account.saveResult', { prefix: successPrefix, count: totalCount }, `${successPrefix}，新增 ${totalCount} 个`);
+    finishInlineProgress(msg, 'success');
     showToast(msg, 'success');
     load();
-  } catch (e) { showToast(`${errorPrefix}: ${e.message}`, 'error'); }
+  } catch (e) {
+    finishInlineProgress(`${errorPrefix}: ${e.message}`, 'error');
+    showToast(`${errorPrefix}: ${e.message}`, 'error');
+  }
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────
@@ -1991,30 +2109,60 @@ function doDelete(tokens) {
     async () => {
       try {
         showToast(tr('account.deleting', { n }, `正在删除 ${n} 个账户…`), 'info');
+        showInlineProgress(tr('account.deleting', { n }, `正在删除 ${n} 个账户…`), 0, 1);
         await _api('DELETE', '/tokens', tokens);
+        updateInlineProgress(1, 1);
         if (selectAllFiltered) clearSelectionState();
         tokens.forEach(t => sel.delete(t));
+        finishInlineProgress(tr('account.deleteDone', { n }, `已删除 ${n} 个`), 'success');
         showToast(tr('account.deleteDone', { n }, `已删除 ${n} 个`), 'success');
         load();
-      } catch (e) { showToast(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error'); }
+      } catch (e) {
+        finishInlineProgress(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error');
+        showToast(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error');
+      }
     });
 }
 async function batchDeleteSel() {
-  const tokens = await resolveSelectedTokens();
-  if (tokens.length) doDelete(tokens);
+  const count = selectedCount();
+  if (!count) return;
+  if (!selectAllFiltered) {
+    const tokens = await resolveSelectedTokens();
+    if (tokens.length) doDelete(tokens);
+    return;
+  }
+  openConfirm(
+    tr('account.deleteConfirmTitle', null, '确认删除'),
+    tr('account.deleteConfirmMany', { n: count }, `确认删除 <b>${count}</b> 个账户？<br><small style="color:var(--error)">此操作不可撤销。</small>`),
+    async () => {
+      try {
+        showToast(tr('account.deleting', { n: count }, `正在删除 ${count} 个账户…`), 'info');
+        showInlineProgress(tr('account.deleting', { n: count }, `正在删除 ${count} 个账户…`), 0, count);
+        await _api('DELETE', '/tokens', currentSelectionPayload());
+        clearSelectionState();
+        finishInlineProgress(tr('account.deleteDone', { n: count }, `已删除 ${count} 个`), 'success');
+        showToast(tr('account.deleteDone', { n: count }, `已删除 ${count} 个`), 'success');
+        load();
+      } catch (e) {
+        finishInlineProgress(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error');
+        showToast(`${tr('account.deleteFailed', null, '删除失败')}: ${e.message}`, 'error');
+      }
+    });
 }
 
 // ── Batch SSE runner ───────────────────────────────────────────────────────
 let _batchTaskId = null;
 let _batchEs     = null;
 
-async function _runBatch(endpoint, tokens, label, onDone) {
+async function _runBatch(endpoint, selection, label, onDone) {
   const btnCancel = document.getElementById('btn-batch-cancel');
   ['btn-nsfw','btn-refresh','btn-delete'].forEach(id =>
     document.getElementById(id).style.display = 'none');
   btnCancel.style.display = '';
 
   const progress = showProgressToast(label);
+  const expectedTotal = Array.isArray(selection) ? selection.length : selectedCount();
+  showInlineProgress(label, 0, expectedTotal);
   let _finalReceived = false;
 
   function _cleanup() {
@@ -2028,9 +2176,10 @@ async function _runBatch(endpoint, tokens, label, onDone) {
   }
 
   try {
-    const d = await _api('POST', `${endpoint}?async=true`, { tokens });
+    const payload = Array.isArray(selection) ? { tokens: selection } : selection;
+    const d = await _api('POST', `${endpoint}?async=true`, payload);
     _batchTaskId = d.task_id;
-    const total = d.total || tokens.length;
+    const total = d.total || expectedTotal;
 
     const key = await adminKey.get();
     const es = new EventSource(`${ADMIN_API}/batch/${_batchTaskId}/stream?app_key=${encodeURIComponent(key)}`);
@@ -2040,18 +2189,22 @@ async function _runBatch(endpoint, tokens, label, onDone) {
       const ev = JSON.parse(e.data);
       if (ev.type === 'snapshot' || ev.type === 'progress') {
         progress.update(ev.processed || 0, total);
+        updateInlineProgress(ev.processed || 0, total, label);
       }
       if (['done', 'error', 'cancelled'].includes(ev.type)) {
         _done(es);
         if (ev.type === 'done') {
           const s = ev.result?.summary || {};
           const ok = s.ok ?? 0, fail = s.fail ?? 0;
+          finishInlineProgress(`${label.replace('…','').replace('正在','')} 完成：成功 ${ok}，失败 ${fail}`, fail > 0 ? 'error' : 'success');
           progress.finish(`${label.replace('…','').replace('正在','')} 完成：成功 ${ok}，失败 ${fail}`, fail > 0 ? 'error' : 'success');
           onDone(ok, fail);
           load();
         } else if (ev.type === 'cancelled') {
+          finishInlineProgress('已取消', 'error');
           progress.finish('已取消', 'error');
         } else {
+          finishInlineProgress(ev.error || '操作失败', 'error');
           progress.finish(ev.error || '操作失败', 'error');
         }
       }
@@ -2062,12 +2215,14 @@ async function _runBatch(endpoint, tokens, label, onDone) {
       if (this.readyState === EventSource.CLOSED) {
         _batchEs = null;
         _cleanup();
+        finishInlineProgress('连接中断', 'error');
         progress.finish('连接中断', 'error');
       }
       // readyState CONNECTING (0) = browser is auto-reconnecting, let it
     };
   } catch (e) {
     _cleanup();
+    finishInlineProgress(`启动失败: ${e.message}`, 'error');
     progress.finish(`启动失败: ${e.message}`, 'error');
   }
 }
@@ -2085,10 +2240,16 @@ async function refreshOne(token) {
   renderTable();
   try {
     showToast(tr('account.refreshing', { n: 1 }, '正在刷新 1 个账户…'), 'info');
+    showInlineProgress(tr('account.refreshing', { n: 1 }, '正在刷新 1 个账户…'), 0, 1);
     const d = await _api('POST', '/batch/refresh', { tokens:[token] });
+    updateInlineProgress(1, 1);
+    finishInlineProgress(tr('account.refreshDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `刷新完成：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`), d.summary?.fail ? 'error' : 'success');
     showToast(tr('account.refreshDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `刷新完成：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`), 'success');
     await load();
-  } catch (e) { showToast(`${tr('account.refreshFailed', null, '刷新失败')}: ${e.message}`, 'error'); }
+  } catch (e) {
+    finishInlineProgress(`${tr('account.refreshFailed', null, '刷新失败')}: ${e.message}`, 'error');
+    showToast(`${tr('account.refreshFailed', null, '刷新失败')}: ${e.message}`, 'error');
+  }
   finally {
     refreshingTokens.delete(token);
     renderTable();
@@ -2112,7 +2273,21 @@ async function setDisabled(token, disabled) {
           : tr('account.restoringOne', null, '正在恢复账号…'),
         'info',
       );
+      showInlineProgress(
+        disabled
+          ? tr('account.disablingOne', null, '正在禁用账号…')
+          : tr('account.restoringOne', null, '正在恢复账号…'),
+        0,
+        1,
+      );
       await _api('POST', '/tokens/disabled', { token, disabled });
+      updateInlineProgress(1, 1);
+      finishInlineProgress(
+        disabled
+          ? tr('account.disableDone', null, '账号已禁用')
+          : tr('account.restoreDone', null, '账号已恢复'),
+        'success',
+      );
       showToast(
         disabled
           ? tr('account.disableDone', null, '账号已禁用')
@@ -2121,6 +2296,7 @@ async function setDisabled(token, disabled) {
       );
       await load();
     } catch (e) {
+      finishInlineProgress(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error');
       showToast(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error');
     }
   });
@@ -2130,10 +2306,22 @@ function disableOne(token) { setDisabled(token, true); }
 function restoreOne(token) { setDisabled(token, false); }
 
 async function batchRefreshSel() {
-  const tokens = await resolveSelectedTokens();
-  if (!tokens.length) return;
-  await _runBatch('/batch/refresh', tokens,
-    tr('account.refreshing', { n: tokens.length }, `正在刷新 ${tokens.length} 个账户…`),
+  const count = selectedCount();
+  if (!count) return;
+  if (selectAllFiltered) {
+    const prepareLabel = tr('account.refreshPreparing', { n: count }, `正在准备刷新 ${count} 个账户…`);
+    showToast(prepareLabel, 'info');
+    showInlineProgress(prepareLabel, 0, count);
+    await _runBatch('/batch/refresh', currentSelectionPayload(),
+      tr('account.refreshing', { n: count }, `正在刷新 ${count} 个账户…`),
+      (ok, fail) => showToast(tr('account.refreshDone', { ok, fail }, `刷新完成：成功 ${ok}，失败 ${fail}`), 'success')
+    );
+    return;
+  }
+  const finalTokens = await resolveSelectedTokens();
+  if (!finalTokens.length) return;
+  await _runBatch('/batch/refresh', finalTokens,
+    tr('account.refreshing', { n: finalTokens.length }, `正在刷新 ${finalTokens.length} 个账户…`),
     (ok, fail) => showToast(tr('account.refreshDone', { ok, fail }, `刷新完成：成功 ${ok}，失败 ${fail}`), 'success')
   );
 }
@@ -2144,25 +2332,49 @@ async function nsfwOne(token, enabled = true) {
     showToast(enabled
       ? tr('account.nsfwEnablingOne', null, '正在开启 NSFW…')
       : tr('account.nsfwDisablingOne', null, '正在关闭 NSFW…'), 'info');
+    showInlineProgress(
+      enabled
+        ? tr('account.nsfwEnablingOne', null, '正在开启 NSFW…')
+        : tr('account.nsfwDisablingOne', null, '正在关闭 NSFW…'),
+      0,
+      1,
+    );
     const d = await _api('POST', `/batch/nsfw?enabled=${enabled ? 'true' : 'false'}`, { tokens: [token] });
+    updateInlineProgress(1, 1);
+    finishInlineProgress(
+      enabled
+        ? tr('account.nsfwDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `NSFW 已开启：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`)
+        : tr('account.nsfwDisableDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `NSFW 已关闭：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`),
+      d.summary?.fail ? 'error' : 'success',
+    );
     showToast(enabled
       ? tr('account.nsfwDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `NSFW 已开启：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`)
       : tr('account.nsfwDisableDone', { ok: d.summary?.ok ?? 0, fail: d.summary?.fail ?? 0 }, `NSFW 已关闭：成功 ${d.summary?.ok??0}，失败 ${d.summary?.fail??0}`),
       'success');
     load();
-  } catch (e) { showToast(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error'); }
+  } catch (e) {
+    finishInlineProgress(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error');
+    showToast(`${tr('account.operationFailed', null, '操作失败')}: ${e.message}`, 'error');
+  }
 }
 
 async function batchNSFW() {
-  const tokens = await resolveSelectedTokens();
-  if (!tokens.length) return;
+  const count = selectedCount();
+  if (!count) return;
   openConfirm(
     tr('account.nsfwConfirmTitle', null, '开启 NSFW'),
-    tr('account.nsfwConfirmBody', { n: tokens.length }, `为选中的 <b>${tokens.length}</b> 个账户开启 NSFW？`),
-    async () => _runBatch('/batch/nsfw', tokens,
-      tr('account.nsfwEnabling', { n: tokens.length }, `正在为 ${tokens.length} 个账户开启 NSFW…`),
-      (ok, fail) => showToast(tr('account.nsfwDone', { ok, fail }, `NSFW 完成：成功 ${ok}，失败 ${fail}`), 'success')
-    )
+    tr('account.nsfwConfirmBody', { n: count }, `为选中的 <b>${count}</b> 个账户开启 NSFW？`),
+    async () => {
+      if (selectAllFiltered) {
+        const prepareLabel = tr('account.nsfwPreparing', { n: count }, `正在准备为 ${count} 个账户开启 NSFW…`);
+        showToast(prepareLabel, 'info');
+        showInlineProgress(prepareLabel, 0, count);
+      }
+      return _runBatch('/batch/nsfw', currentSelectionPayload(),
+        tr('account.nsfwEnabling', { n: count }, `正在为 ${count} 个账户开启 NSFW…`),
+        (ok, fail) => showToast(tr('account.nsfwDone', { ok, fail }, `NSFW 完成：成功 ${ok}，失败 ${fail}`), 'success')
+      );
+    }
   );
 }
 

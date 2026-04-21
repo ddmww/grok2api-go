@@ -304,23 +304,8 @@ func TestAdminRoutes(t *testing.T) {
 	}
 
 	resp = doJSON(http.MethodGet, "/admin/api/models", nil)
-	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"grok-imagine-image-lite"`) || strings.Contains(resp.Body.String(), `"grok-4.3-beta"`) {
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"grok-imagine-image-lite"`) || !strings.Contains(resp.Body.String(), `"grok-4.3-beta"`) || !strings.Contains(resp.Body.String(), `"mode":"static"`) {
 		t.Fatalf("models list failed: %d %s", resp.Code, resp.Body.String())
-	}
-
-	if _, err := repo.UpsertAccounts(context.Background(), []account.Upsert{{
-		Token: "token-super",
-		Pool:  "super",
-	}}); err != nil {
-		t.Fatalf("seed super token failed: %v", err)
-	}
-	if err := runtime.Sync(context.Background()); err != nil {
-		t.Fatalf("sync runtime after super seed: %v", err)
-	}
-
-	resp = doJSON(http.MethodGet, "/admin/api/models", nil)
-	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"grok-4.3-beta"`) {
-		t.Fatalf("models list with super failed: %d %s", resp.Code, resp.Body.String())
 	}
 
 	resp = doJSON(http.MethodPost, "/admin/api/tokens", map[string]any{

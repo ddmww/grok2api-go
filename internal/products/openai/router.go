@@ -643,6 +643,9 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 				result.content = ""
 			}
 		}
+		if strings.TrimSpace(result.content) == "" {
+			result.content = adapter.FinalText()
+		}
 		result.searchSources = adapter.SearchSourcesList()
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		refreshQuotaAsync(state, lease.Token)

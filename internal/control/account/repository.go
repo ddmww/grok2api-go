@@ -44,10 +44,10 @@ type legacyMetaEntity struct {
 
 type accountEntity struct {
 	Token           string `gorm:"primaryKey;size:512"`
-	Pool            string
-	Status          string
-	CreatedAt       int64  `gorm:"column:created_at"`
-	UpdatedAt       int64  `gorm:"column:updated_at"`
+	Pool            string `gorm:"index:idx_accounts_pool"`
+	Status          string `gorm:"index:idx_accounts_status"`
+	CreatedAt       int64  `gorm:"column:created_at;index:idx_accounts_created_at"`
+	UpdatedAt       int64  `gorm:"column:updated_at;index:idx_accounts_updated_at"`
 	TagsJSON        string `gorm:"column:tags"`
 	QuotaAutoJSON   string `gorm:"column:quota_auto"`
 	QuotaFastJSON   string `gorm:"column:quota_fast"`
@@ -63,7 +63,7 @@ type accountEntity struct {
 	LastSyncAt      int64  `gorm:"column:last_sync_at"`
 	LastClearAt     int64  `gorm:"column:last_clear_at"`
 	StateReason     string `gorm:"column:state_reason"`
-	DeletedAt       int64  `gorm:"column:deleted_at"`
+	DeletedAt       int64  `gorm:"column:deleted_at;index:idx_accounts_deleted_at"`
 	ExtJSON         string `gorm:"column:ext"`
 	Revision        int64
 }
@@ -306,16 +306,13 @@ func (r *gormRepository) ListAccounts(ctx context.Context, query ListQuery) (Pag
 	if err := db.Count(&total).Error; err != nil {
 		return Page{}, err
 	}
-	sortBy := "updated_at"
+	sortBy := "created_at"
 	if strings.TrimSpace(query.SortBy) != "" {
 		sortBy = strings.TrimSpace(query.SortBy)
 	}
-	order := sortBy
-	if query.SortDesc {
-		order += " desc"
-	}
 	var entities []accountEntity
-	if err := db.Order(order).Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Find(&entities).Error; err != nil {
+	db = applySortOrder(db, sortBy, query.SortDesc)
+	if err := db.Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Find(&entities).Error; err != nil {
 		return Page{}, err
 	}
 	revision, err := r.GetRevision(ctx)
@@ -337,7 +334,6 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	newScope := func(q ListQuery) *gorm.DB {
 		return applyListQuery(r.db.WithContext(ctx).Model(&accountEntity{}), q)
 	}
-	filtered := newScope(query)
 
 	revision, err := r.GetRevision(ctx)
 	if err != nil {
@@ -357,91 +353,99 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 		},
 	}
 
-	if err := filtered.Count(&summary.Total).Error; err != nil {
+	type totalsRow struct {
+		Total  int64
+		Calls  int64
+		Auto   int64
+		Fast   int64
+		Expert int64
+		Heavy  int64
+	}
+	var totals totalsRow
+	filtered := newScope(query)
+	if err := filtered.Select(strings.Join([]string{
+		"COUNT(*) AS total",
+		"COALESCE(SUM(usage_use_count + usage_fail_count), 0) AS calls",
+		"COALESCE(SUM(" + quotaRemainingExpr(r.storageType, "quota_auto") + "), 0) AS auto",
+		"COALESCE(SUM(" + quotaRemainingExpr(r.storageType, "quota_fast") + "), 0) AS fast",
+		"COALESCE(SUM(" + quotaRemainingExpr(r.storageType, "quota_expert") + "), 0) AS expert",
+		"COALESCE(SUM(" + quotaRemainingExpr(r.storageType, "quota_heavy") + "), 0) AS heavy",
+	}, ", ")).Scan(&totals).Error; err != nil {
 		return Summary{}, err
 	}
-	summary.Pool["all"] = summary.Total
-	summary.NSFW["all"] = summary.Total
+	summary.Total = totals.Total
+	summary.Calls = totals.Calls
+	summary.Quota["auto"] = totals.Auto
+	summary.Quota["fast"] = totals.Fast
+	summary.Quota["expert"] = totals.Expert
+	summary.Quota["heavy"] = totals.Heavy
 
-	var calls int64
-	if err := filtered.Select("COALESCE(SUM(usage_use_count + usage_fail_count), 0)").Scan(&calls).Error; err != nil {
+	type groupedCount struct {
+		Key   string
+		Count int64
+	}
+	var statusRows []groupedCount
+	if err := newScope(queryWithoutStatus(query)).Select("status AS key, COUNT(*) AS count").Group("status").Scan(&statusRows).Error; err != nil {
 		return Summary{}, err
 	}
-	summary.Calls = calls
-
-	for _, quotaField := range []struct {
-		name   string
-		column string
-	}{
-		{name: "auto", column: quotaRemainingExpr(r.storageType, "quota_auto")},
-		{name: "fast", column: quotaRemainingExpr(r.storageType, "quota_fast")},
-		{name: "expert", column: quotaRemainingExpr(r.storageType, "quota_expert")},
-		{name: "heavy", column: quotaRemainingExpr(r.storageType, "quota_heavy")},
-	} {
-		var total int64
-		if err := filtered.Select("COALESCE(SUM(" + quotaField.column + "), 0)").Scan(&total).Error; err != nil {
-			return Summary{}, err
+	for _, row := range statusRows {
+		summary.Status["all"] += row.Count
+		switch row.Key {
+		case string(StatusActive):
+			summary.Status["active"] = row.Count
+		case string(StatusCooling):
+			summary.Status["cooling"] = row.Count
+		case string(StatusDisabled):
+			summary.Status["disabled"] = row.Count
+		default:
+			summary.Status["invalid"] += row.Count
 		}
-		summary.Quota[quotaField.name] = total
 	}
 
-	statusScope := newScope(queryWithoutStatus(query))
-	var statusAll int64
-	if err := countInto(statusScope, &statusAll); err != nil {
+	var poolRows []groupedCount
+	if err := newScope(queryWithoutPool(query)).Select("pool AS key, COUNT(*) AS count").Group("pool").Scan(&poolRows).Error; err != nil {
 		return Summary{}, err
 	}
-	summary.Status["all"] = statusAll
-	var statusActive int64
-	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusActive)), &statusActive); err != nil {
-		return Summary{}, err
-	}
-	summary.Status["active"] = statusActive
-	var statusCooling int64
-	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusCooling)), &statusCooling); err != nil {
-		return Summary{}, err
-	}
-	summary.Status["cooling"] = statusCooling
-	var statusDisabled int64
-	if err := countInto(newScope(queryWithoutStatus(query)).Where("status = ?", string(StatusDisabled)), &statusDisabled); err != nil {
-		return Summary{}, err
-	}
-	summary.Status["disabled"] = statusDisabled
-	summary.Status["invalid"] = summary.Status["all"] - summary.Status["active"] - summary.Status["cooling"] - summary.Status["disabled"]
-	if summary.Status["invalid"] < 0 {
-		summary.Status["invalid"] = 0
-	}
-
-	poolScope := newScope(queryWithoutPool(query))
-	var poolAll int64
-	if err := countInto(poolScope, &poolAll); err != nil {
-		return Summary{}, err
-	}
-	summary.Pool["all"] = poolAll
-	for _, pool := range []string{"basic", "super", "heavy"} {
-		var poolCount int64
-		if err := countInto(newScope(queryWithoutPool(query)).Where("pool = ?", pool), &poolCount); err != nil {
-			return Summary{}, err
+	for _, row := range poolRows {
+		summary.Pool["all"] += row.Count
+		if _, ok := summary.Pool[row.Key]; ok {
+			summary.Pool[row.Key] = row.Count
 		}
-		summary.Pool[pool] = poolCount
 	}
 
-	nsfwScope := newScope(queryWithoutNSFW(query))
-	var nsfwAll int64
-	if err := countInto(nsfwScope, &nsfwAll); err != nil {
+	type nsfwRow struct {
+		Total   int64
+		Enabled int64
+	}
+	var nsfw nsfwRow
+	if err := newScope(queryWithoutNSFW(query)).
+		Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN "+tagsContainsClause(r.storageType)+" THEN 1 ELSE 0 END), 0) AS enabled", tagsLikePattern("nsfw")).
+		Scan(&nsfw).Error; err != nil {
 		return Summary{}, err
 	}
-	summary.NSFW["all"] = nsfwAll
-	var nsfwEnabled int64
-	if err := countInto(nsfwScope.Where(tagsContainsClause(r.storageType), tagsLikePattern("nsfw")), &nsfwEnabled); err != nil {
-		return Summary{}, err
-	}
-	summary.NSFW["enabled"] = nsfwEnabled
-	summary.NSFW["disabled"] = summary.NSFW["all"] - summary.NSFW["enabled"]
+	summary.NSFW["all"] = nsfw.Total
+	summary.NSFW["enabled"] = nsfw.Enabled
+	summary.NSFW["disabled"] = nsfw.Total - nsfw.Enabled
 	if summary.NSFW["disabled"] < 0 {
 		summary.NSFW["disabled"] = 0
 	}
 
 	return summary, nil
+}
+
+func applySortOrder(db *gorm.DB, sortBy string, sortDesc bool) *gorm.DB {
+	dir := "asc"
+	if sortDesc {
+		dir = "desc"
+	}
+	switch sortBy {
+	case "updated_at":
+		return db.Order("updated_at " + dir).Order("token asc")
+	case "token":
+		return db.Order("token " + dir)
+	default:
+		return db.Order("created_at " + dir).Order("token asc")
+	}
 }
 
 func applyListQuery(db *gorm.DB, query ListQuery) *gorm.DB {
@@ -483,10 +487,6 @@ func queryWithoutPool(query ListQuery) ListQuery {
 func queryWithoutNSFW(query ListQuery) ListQuery {
 	query.NSFW = ""
 	return query
-}
-
-func countInto(db *gorm.DB, dest *int64) error {
-	return db.Count(dest).Error
 }
 
 func tagsContainsClause(storageType string) string {

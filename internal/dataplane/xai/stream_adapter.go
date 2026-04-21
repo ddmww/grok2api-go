@@ -17,19 +17,20 @@ type FrameEvent struct {
 }
 
 type StreamAdapter struct {
-	cfg                *config.Service
-	cardCache          map[string]map[string]any
-	citationOrder      []string
-	citationMap        map[string]int
-	lastCitationIndex  int
-	pendingCitations   []pendingCitation
-	annotations        []map[string]any
-	textOffset         int
-	webSearchResults   []map[string]any
-	webSearchSeen      map[string]struct{}
-	ThinkingBuf        []string
-	TextBuf            []string
-	ImageURLs          []ImageRef
+	cfg               *config.Service
+	cardCache         map[string]map[string]any
+	citationOrder     []string
+	citationMap       map[string]int
+	lastCitationIndex int
+	pendingCitations  []pendingCitation
+	annotations       []map[string]any
+	textOffset        int
+	webSearchResults  []map[string]any
+	webSearchSeen     map[string]struct{}
+	ThinkingBuf       []string
+	TextBuf           []string
+	ImageURLs         []ImageRef
+	FinalMessage      string
 }
 
 type pendingCitation struct {
@@ -91,6 +92,9 @@ func (a *StreamAdapter) Feed(data string) []FrameEvent {
 	if cardRaw, _ := response["cardAttachment"].(map[string]any); cardRaw != nil {
 		events = append(events, a.handleCard(cardRaw)...)
 	}
+	if modelResponse, _ := response["modelResponse"].(map[string]any); modelResponse != nil {
+		a.captureModelResponse(modelResponse)
+	}
 	a.collectSearchSources(response)
 
 	if response["finalMetadata"] != nil {
@@ -126,6 +130,52 @@ func (a *StreamAdapter) Feed(data string) []FrameEvent {
 		events = append(events, FrameEvent{Kind: "text", Content: cleaned})
 	}
 	return events
+}
+
+func (a *StreamAdapter) captureModelResponse(modelResponse map[string]any) {
+	message := strings.TrimSpace(asString(modelResponse["message"]))
+	if message == "" {
+		return
+	}
+	cardMap := map[string]map[string]any{}
+	if attachments, _ := modelResponse["cardAttachmentsJson"].([]any); attachments != nil {
+		for _, raw := range attachments {
+			text, _ := raw.(string)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			var cardData map[string]any
+			if err := json.Unmarshal([]byte(text), &cardData); err != nil || cardData == nil {
+				continue
+			}
+			cardID := strings.TrimSpace(asString(cardData["id"]))
+			if cardID == "" {
+				continue
+			}
+			cardMap[cardID] = cardData
+		}
+	}
+	message = grokRenderRe.ReplaceAllStringFunc(message, func(raw string) string {
+		match := grokRenderRe.FindStringSubmatch(raw)
+		if len(match) < 4 {
+			return ""
+		}
+		card := cardMap[match[1]]
+		if card == nil {
+			return ""
+		}
+		image, _ := card["image"].(map[string]any)
+		original := strings.TrimSpace(asString(image["original"]))
+		if original == "" {
+			return ""
+		}
+		title := strings.TrimSpace(asString(image["title"]))
+		if title == "" {
+			title = "image"
+		}
+		return fmt.Sprintf("![%s](%s)", title, original)
+	})
+	a.FinalMessage = message
 }
 
 func (a *StreamAdapter) handleCard(cardRaw map[string]any) []FrameEvent {
@@ -354,6 +404,10 @@ func (a *StreamAdapter) SearchSourcesList() []map[string]any {
 		})
 	}
 	return out
+}
+
+func (a *StreamAdapter) FinalText() string {
+	return strings.TrimSpace(a.FinalMessage)
 }
 
 func normalizeWhitespace(value string) string {

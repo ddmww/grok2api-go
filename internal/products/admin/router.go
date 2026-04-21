@@ -56,13 +56,6 @@ var (
 
 const tokenImportBatchSize = 1000
 
-var availableModelsCache = struct {
-	mu       sync.Mutex
-	revision int64
-	expires  time.Time
-	payload  gin.H
-}{}
-
 func Mount(router *gin.Engine, state *app.State) {
 	updater := newUpdateService()
 	router.StaticFS("/static", http.Dir(paths.StaticDir()))
@@ -266,9 +259,14 @@ func Mount(router *gin.Engine, state *app.State) {
 		})
 
 		api.DELETE("/tokens", func(c *gin.Context) {
-			var tokens []string
-			if err := c.ShouldBindJSON(&tokens); err != nil {
+			payload, err := parseBatchSelectionPayload(c)
+			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+				return
+			}
+			tokens, err := resolveBatchSelection(c.Request.Context(), state.Repo, payload, false)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
 				return
 			}
 			result, err := state.Repo.DeleteAccounts(c.Request.Context(), tokens)
@@ -686,53 +684,7 @@ func quotaPatch(record account.Record) map[string]account.QuotaWindow {
 	return out
 }
 
-func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, error) {
-	revision, err := repo.GetRevision(ctx)
-	if err != nil {
-		return nil, err
-	}
-	availableModelsCache.mu.Lock()
-	if availableModelsCache.payload != nil && availableModelsCache.revision == revision && time.Now().Before(availableModelsCache.expires) {
-		payload := availableModelsCache.payload
-		availableModelsCache.mu.Unlock()
-		return payload, nil
-	}
-	availableModelsCache.mu.Unlock()
-
-	pageNum := 1
-	poolCounts := map[string]int{}
-	now := account.NowMS()
-	for {
-		page, err := repo.ListAccounts(ctx, account.ListQuery{
-			Page:           pageNum,
-			PageSize:       2000,
-			IncludeDeleted: false,
-			SortBy:         "updated_at",
-			SortDesc:       true,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, record := range page.Items {
-			status := record.EffectiveStatus(now)
-			if record.IsDeleted() || status == account.StatusDisabled {
-				continue
-			}
-			poolCounts[record.Pool]++
-		}
-		if int64(pageNum*2000) >= page.Total || len(page.Items) == 0 {
-			break
-		}
-		pageNum++
-	}
-
-	activePools := make([]string, 0, len(poolCounts))
-	for _, pool := range []string{"basic", "super", "heavy"} {
-		if poolCounts[pool] > 0 {
-			activePools = append(activePools, pool)
-		}
-	}
-
+func listAvailableModels(_ context.Context, _ account.Repository) (gin.H, error) {
 	grouped := map[string][]gin.H{
 		"chat":       {},
 		"image":      {},
@@ -740,9 +692,6 @@ func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, e
 		"video":      {},
 	}
 	for _, spec := range model.All() {
-		if !modelAvailableForPools(spec, activePools) {
-			continue
-		}
 		grouped[modelCategory(spec)] = append(grouped[modelCategory(spec)], gin.H{
 			"id":          spec.Name,
 			"name":        spec.Name,
@@ -752,32 +701,10 @@ func listAvailableModels(ctx context.Context, repo account.Repository) (gin.H, e
 		})
 	}
 
-	payload := gin.H{
-		"pools": gin.H{
-			"active": activePools,
-			"counts": poolCounts,
-		},
+	return gin.H{
 		"groups": grouped,
-	}
-	availableModelsCache.mu.Lock()
-	availableModelsCache.revision = revision
-	availableModelsCache.expires = time.Now().Add(15 * time.Second)
-	availableModelsCache.payload = payload
-	availableModelsCache.mu.Unlock()
-	return payload, nil
-}
-
-func modelAvailableForPools(spec model.Spec, pools []string) bool {
-	if len(pools) == 0 {
-		return false
-	}
-	candidates := spec.PoolCandidates()
-	for _, pool := range pools {
-		if slicesContains(candidates, account.NormalizePool(pool)) {
-			return true
-		}
-	}
-	return false
+		"mode":   "static",
+	}, nil
 }
 
 func modelCategory(spec model.Spec) string {
@@ -841,31 +768,15 @@ func listAllAssets(ctx context.Context, state *app.State) ([]map[string]any, int
 }
 
 func listManageableTokens(ctx context.Context, repo account.Repository) ([]string, error) {
-	pageNum := 1
-	tokens := make([]string, 0, 64)
-	now := account.NowMS()
-	for {
-		page, err := repo.ListAccounts(ctx, account.ListQuery{
-			Page:           pageNum,
-			PageSize:       2000,
-			IncludeDeleted: false,
-			SortBy:         "updated_at",
-			SortDesc:       true,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, record := range page.Items {
-			status := record.EffectiveStatus(now)
-			if record.IsDeleted() || (status != account.StatusActive && status != account.StatusCooling) {
-				continue
-			}
-			tokens = append(tokens, record.Token)
-		}
-		if int64(pageNum*2000) >= page.Total || len(page.Items) == 0 {
-			break
-		}
-		pageNum++
+	tokens, err := listTokensByQuery(ctx, repo, account.ListQuery{
+		Page:           1,
+		PageSize:       2000,
+		IncludeDeleted: false,
+		SortBy:         "created_at",
+		SortDesc:       true,
+	}, true)
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(tokens)
 	return tokens, nil
@@ -971,26 +882,22 @@ func normalizeAnyStringSlice(value any) []string {
 }
 
 func dispatchBatch(c *gin.Context, state *app.State, kind string, enabled bool) {
-	var payload struct {
-		Tokens []string `json:"tokens"`
-	}
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	payload, err := parseBatchSelectionPayload(c)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
-	tokens := sanitizeTokens(payload.Tokens)
+	tokens, err := resolveBatchSelection(c.Request.Context(), state.Repo, payload, kind != "refresh")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
 	if len(tokens) == 0 {
 		switch kind {
 		case "refresh":
 			c.JSON(http.StatusBadRequest, gin.H{"message": "No tokens provided"})
 			return
 		case "nsfw", "cache-clear":
-			var err error
-			tokens, err = listManageableTokens(c.Request.Context(), state.Repo)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
-				return
-			}
 			if len(tokens) == 0 {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "No tokens available"})
 				return
@@ -1007,6 +914,89 @@ func dispatchBatch(c *gin.Context, state *app.State, kind string, enabled bool) 
 	}
 	result := runBatch(context.Background(), state, kind, enabled, tokens, concurrency)
 	c.JSON(http.StatusOK, gin.H{"status": "success", "summary": gin.H{"total": len(tokens), "ok": result.ok, "fail": result.fail}, "results": result.items})
+}
+
+type batchSelectionPayload struct {
+	Tokens            []string `json:"tokens"`
+	SelectAllFiltered bool     `json:"select_all_filtered"`
+	Filters           struct {
+		Pool   string `json:"pool"`
+		Status string `json:"status"`
+		NSFW   string `json:"nsfw"`
+	} `json:"filters"`
+}
+
+func parseBatchSelectionPayload(c *gin.Context) (batchSelectionPayload, error) {
+	var payload batchSelectionPayload
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return payload, err
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return payload, nil
+	}
+	var asTokens []string
+	if err := json.Unmarshal(body, &asTokens); err == nil {
+		payload.Tokens = asTokens
+		return payload, nil
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return payload, err
+	}
+	return payload, nil
+}
+
+func resolveBatchSelection(ctx context.Context, repo account.Repository, payload batchSelectionPayload, fallbackManageable bool) ([]string, error) {
+	tokens := sanitizeTokens(payload.Tokens)
+	if payload.SelectAllFiltered {
+		return listTokensByQuery(ctx, repo, account.ListQuery{
+			Page:           1,
+			PageSize:       2000,
+			Pool:           strings.TrimSpace(payload.Filters.Pool),
+			Status:         account.Status(strings.TrimSpace(payload.Filters.Status)),
+			NSFW:           strings.TrimSpace(payload.Filters.NSFW),
+			IncludeDeleted: false,
+			SortBy:         "created_at",
+			SortDesc:       true,
+		}, false)
+	}
+	if len(tokens) > 0 {
+		return tokens, nil
+	}
+	if fallbackManageable {
+		return listManageableTokens(ctx, repo)
+	}
+	return nil, nil
+}
+
+func listTokensByQuery(ctx context.Context, repo account.Repository, query account.ListQuery, onlyManageable bool) ([]string, error) {
+	pageNum := 1
+	tokens := make([]string, 0, 64)
+	now := account.NowMS()
+	for {
+		query.Page = pageNum
+		page, err := repo.ListAccounts(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range page.Items {
+			if record.IsDeleted() {
+				continue
+			}
+			if onlyManageable {
+				status := record.EffectiveStatus(now)
+				if status != account.StatusActive && status != account.StatusCooling {
+					continue
+				}
+			}
+			tokens = append(tokens, record.Token)
+		}
+		if int64(pageNum*query.PageSize) >= page.Total || len(page.Items) == 0 {
+			break
+		}
+		pageNum++
+	}
+	return tokens, nil
 }
 
 type batchResult struct {
@@ -1505,7 +1495,7 @@ func parseAccountListQuery(c *gin.Context) account.ListQuery {
 		Status:         account.Status(strings.TrimSpace(c.Query("status"))),
 		NSFW:           strings.TrimSpace(c.Query("nsfw")),
 		IncludeDeleted: false,
-		SortBy:         "updated_at",
+		SortBy:         "created_at",
 		SortDesc:       true,
 	}
 }

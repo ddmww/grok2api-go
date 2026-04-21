@@ -297,6 +297,9 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 				result.outputTokens = len(result.toolCalls) * 8
 			}
 		}
+		if strings.TrimSpace(result.content) == "" {
+			result.content = adapter.FinalText()
+		}
 		result.searchSources = adapter.SearchSourcesList()
 		if result.outputTokens == 0 {
 			result.outputTokens = tokens.EstimateTextByModel(spec.Name, result.content) + tokens.EstimateTextByModel(spec.Name, result.reasoning)

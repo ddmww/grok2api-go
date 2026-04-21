@@ -177,7 +177,11 @@ func (f *FakeGrokServer) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	thinking, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"token": f.Reasoning, "isThinking": true}}})
-	answer, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"token": content, "messageTag": "final"}}})
+	answerPayload := map[string]any{"token": content, "messageTag": "final"}
+	if strings.Contains(message, "model_response_only") {
+		answerPayload = map[string]any{"modelResponse": map[string]any{"message": content}}
+	}
+	answer, _ := json.Marshal(map[string]any{"result": map[string]any{"response": answerPayload}})
 	done, _ := json.Marshal(map[string]any{"result": map[string]any{"response": map[string]any{"finalMetadata": map[string]any{"complete": true}}}})
 	_, _ = w.Write([]byte("data: " + string(thinking) + "\n\n"))
 	_, _ = w.Write([]byte("data: " + string(answer) + "\n\n"))
