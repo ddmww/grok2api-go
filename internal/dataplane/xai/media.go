@@ -46,6 +46,7 @@ type GeneratedImage struct {
 	ImageID  string
 	Stage    string
 	IsFinal  bool
+	Source   string
 }
 
 type ImageGenerationMeta struct {
@@ -723,6 +724,9 @@ func (c *Client) generateImagesViaAppChat(ctx context.Context, token string, req
 		return nil, "", &ImageGenerationMeta{Backend: "app_chat", SawRateLimit: isRateLimitedError(err)}, err
 	}
 	items, reasoning := collectImageCandidatesFromFrames(frames)
+	for index := range items {
+		items[index].Source = "app_chat"
+	}
 	return items, reasoning, &ImageGenerationMeta{Backend: "app_chat"}, nil
 }
 
@@ -756,6 +760,9 @@ func (c *Client) generateImagesViaWebsocketCompat(ctx context.Context, token str
 			continue
 		}
 		items, reasoning := collectImageCandidatesFromFrames(frames)
+		for index := range items {
+			items[index].Source = "websocket"
+		}
 		if reasoning != "" {
 			reasoningParts = append(reasoningParts, reasoning)
 		}
@@ -787,6 +794,9 @@ func (c *Client) generateImagesViaWebsocketLive(ctx context.Context, token strin
 				return nil, reasoning, &ImageGenerationMeta{Backend: "websocket", SawRateLimit: true}, err
 			}
 			continue
+		}
+		for index := range items {
+			items[index].Source = "websocket"
 		}
 		all = append(all, items...)
 		if selected, _ := selectFinalOrPartialImages(all, count); len(selected) >= count && hasEnoughFinals(all, count) {
@@ -1412,7 +1422,7 @@ func (c *Client) EditImages(ctx context.Context, token string, req ImageEditRequ
 	sort.Ints(keys)
 	out := make([]GeneratedImage, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, GeneratedImage{URL: finalURLs[key], Progress: 100, ImageID: fmt.Sprintf("edit-%d", key)})
+		out = append(out, GeneratedImage{URL: finalURLs[key], Progress: 100, ImageID: fmt.Sprintf("edit-%d", key), Source: "image_edit"})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("image edit returned no images")

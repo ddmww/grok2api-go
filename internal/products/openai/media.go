@@ -40,6 +40,28 @@ type preparedImageOutput struct {
 	B64JSON   string
 }
 
+func cacheImageSourcePrefix(item xai.GeneratedImage) string {
+	switch strings.ToLower(strings.TrimSpace(item.Source)) {
+	case "app_chat":
+		return "appchat"
+	case "websocket":
+		return "websocket"
+	case "image_edit":
+		return "edit"
+	default:
+		return "image"
+	}
+}
+
+func cacheImageID(item xai.GeneratedImage) string {
+	base := fileIDFromURL(item.URL)
+	prefix := cacheImageSourcePrefix(item)
+	if strings.HasPrefix(base, prefix+"-") {
+		return base
+	}
+	return prefix + "-" + base
+}
+
 type videoJob struct {
 	ID          string
 	Model       string
@@ -236,7 +258,7 @@ func ensureLocalImageURL(ctx context.Context, state *app.State, token string, it
 	if item.URL == "" {
 		return "", fmt.Errorf("empty image url")
 	}
-	fileID := fileIDFromURL(item.URL)
+	fileID := cacheImageID(item)
 	path, _ := localFilePath(paths.ImageCacheDir(), fileID)
 	if path != "" {
 		return localImageURL(state, fileID), nil
