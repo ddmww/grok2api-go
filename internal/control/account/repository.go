@@ -87,10 +87,18 @@ func NewRepositoryFromEnv() (Repository, error) {
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 			return nil, err
 		}
-		db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+		dsn := dbPath + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 		if err != nil {
 			return nil, err
 		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, err
+		}
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetConnMaxLifetime(0)
 		return &gormRepository{db: db, storageType: "local"}, nil
 	case "mysql":
 		dsn := os.Getenv("ACCOUNT_MYSQL_URL")
