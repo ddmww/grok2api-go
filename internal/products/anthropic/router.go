@@ -249,10 +249,14 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
 	inputTokens := tokens.EstimateTextByModel(spec.Name, message)
+	var lastRetryErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := state.Runtime.ReserveWithExclude(spec, excluded)
 		if err != nil {
+			if lastRetryErr != nil {
+				return runResult{}, lastRetryErr
+			}
 			return runResult{}, err
 		}
 		lines, errCh := state.XAI.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
@@ -285,6 +289,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		if err := <-errCh; err != nil {
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForAnthropic(err))
 			if shouldRetryAnthropic(err, retryCodes, attempt, maxRetries) {
+				lastRetryErr = err
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
@@ -299,6 +304,18 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		}
 		if strings.TrimSpace(result.content) == "" {
 			result.content = adapter.FinalText()
+		}
+		if strings.TrimSpace(result.content) == "" && len(result.toolCalls) == 0 {
+			if errorMessage := adapter.FinalError(); errorMessage != "" {
+				err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: errorMessage}
+				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForAnthropic(err))
+				if shouldRetryAnthropic(err, retryCodes, attempt, maxRetries) {
+					lastRetryErr = err
+					excluded[lease.Token] = struct{}{}
+					continue
+				}
+				return runResult{}, err
+			}
 		}
 		result.searchSources = adapter.SearchSourcesList()
 		if result.outputTokens == 0 {
@@ -848,9 +865,8 @@ func stringifyContent(content any) string {
 }
 
 func buildReversePayload(state *app.State, spec model.Spec, message string) map[string]any {
+	modelName, modelMode := upstreamChatModel(spec)
 	return map[string]any{
-		"collectionIds":               []string{},
-		"connectors":                  []string{},
 		"deviceEnvInfo":               map[string]any{"darkModeEnabled": false, "devicePixelRatio": 2, "screenHeight": 1329, "screenWidth": 2056, "viewportHeight": 1083, "viewportWidth": 2056},
 		"disableMemory":               !state.Config.GetBool("features.memory", false),
 		"disableSearch":               false,
@@ -865,15 +881,43 @@ func buildReversePayload(state *app.State, spec model.Spec, message string) map[
 		"imageAttachments":            []string{},
 		"imageGenerationCount":        2,
 		"isAsyncChat":                 false,
+		"isReasoning":                 false,
 		"message":                     message,
-		"modeId":                      spec.Mode,
-		"responseMetadata":            map[string]any{},
+		"modelMode":                   modelMode,
+		"modelName":                   modelName,
+		"responseMetadata":            map[string]any{"requestModelDetails": map[string]any{"modelId": modelName}},
 		"returnImageBytes":            false,
 		"returnRawGrokInXaiRequest":   false,
-		"searchAllConnectors":         false,
 		"sendFinalMetadata":           true,
 		"temporary":                   state.Config.GetBool("features.temporary", true),
+		"toolOverrides":               map[string]any{},
 	}
+}
+
+func upstreamChatModel(spec model.Spec) (string, string) {
+	modelName := spec.Name
+	switch {
+	case strings.HasPrefix(spec.Name, "grok-4.20"):
+		modelName = "grok-420"
+	case strings.HasPrefix(spec.Name, "grok-4.3"):
+		modelName = "grok-4-3"
+	}
+	modelMode := "MODEL_MODE_FAST"
+	switch spec.Mode {
+	case "auto":
+		if modelName == "grok-420" {
+			modelMode = "MODEL_MODE_GROK_420"
+		} else {
+			modelMode = "MODEL_MODE_AUTO"
+		}
+	case "expert":
+		modelMode = "MODEL_MODE_EXPERT"
+	case "heavy":
+		modelMode = "MODEL_MODE_HEAVY"
+	case "grok-420-computer-use-sa":
+		modelMode = "MODEL_MODE_GROK_4_3"
+	}
+	return modelName, modelMode
 }
 
 func shouldRetryAnthropic(err error, retryCodes map[int]struct{}, attempt, maxRetries int) bool {

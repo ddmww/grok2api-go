@@ -31,6 +31,7 @@ type StreamAdapter struct {
 	TextBuf           []string
 	ImageURLs         []ImageRef
 	FinalMessage      string
+	streamErrors      []string
 }
 
 type pendingCitation struct {
@@ -95,6 +96,7 @@ func (a *StreamAdapter) Feed(data string) []FrameEvent {
 	if modelResponse, _ := response["modelResponse"].(map[string]any); modelResponse != nil {
 		a.captureModelResponse(modelResponse)
 	}
+	a.captureResponseError(response)
 	a.collectSearchSources(response)
 
 	if response["finalMetadata"] != nil {
@@ -176,6 +178,42 @@ func (a *StreamAdapter) captureModelResponse(modelResponse map[string]any) {
 		return fmt.Sprintf("![%s](%s)", title, original)
 	})
 	a.FinalMessage = message
+	if items, ok := modelResponse["streamErrors"].([]any); ok {
+		for _, item := range items {
+			if mapped, ok := item.(map[string]any); ok {
+				a.recordStreamError(asString(mapped["message"]))
+			}
+		}
+	}
+}
+
+func (a *StreamAdapter) captureResponseError(response map[string]any) {
+	if response == nil {
+		return
+	}
+	if payload, _ := response["error"].(map[string]any); payload != nil {
+		a.recordStreamError(asString(payload["message"]))
+	}
+	if items, ok := response["streamErrors"].([]any); ok {
+		for _, item := range items {
+			if mapped, ok := item.(map[string]any); ok {
+				a.recordStreamError(asString(mapped["message"]))
+			}
+		}
+	}
+}
+
+func (a *StreamAdapter) recordStreamError(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	for _, existing := range a.streamErrors {
+		if existing == message {
+			return
+		}
+	}
+	a.streamErrors = append(a.streamErrors, message)
 }
 
 func (a *StreamAdapter) handleCard(cardRaw map[string]any) []FrameEvent {
@@ -408,6 +446,13 @@ func (a *StreamAdapter) SearchSourcesList() []map[string]any {
 
 func (a *StreamAdapter) FinalText() string {
 	return strings.TrimSpace(a.FinalMessage)
+}
+
+func (a *StreamAdapter) FinalError() string {
+	if len(a.streamErrors) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(a.streamErrors[0])
 }
 
 func normalizeWhitespace(value string) string {

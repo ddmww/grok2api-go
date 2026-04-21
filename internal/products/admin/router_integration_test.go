@@ -35,6 +35,7 @@ func (f fakeUpdateService) GetLatestReleaseInfo(context.Context, bool) updateche
 func intPtr(value int) *int          { return &value }
 func int64Ptr(value int64) *int64    { return &value }
 func stringPtr(value string) *string { return &value }
+func statusPtr(value account.Status) *account.Status { return &value }
 
 func TestAdminRoutes(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", "..", ".."))
@@ -339,6 +340,28 @@ func TestAdminRoutes(t *testing.T) {
 	}
 	if autoRecords[0].Pool != "basic" || autoRecords[0].UsageSyncCount == 0 {
 		t.Fatalf("auto token not refreshed: %#v", autoRecords[0])
+	}
+
+	if _, err := repo.PatchAccounts(context.Background(), []account.Patch{{
+		Token:       "token-auto",
+		Status:      statusPtr(account.StatusCooling),
+		StateReason: stringPtr("rate_limited"),
+		ExtMerge:    map[string]any{"cooldown_until": account.NowMS() + 3600_000},
+	}}); err != nil {
+		t.Fatalf("seed cooling token failed: %v", err)
+	}
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync cooling token failed: %v", err)
+	}
+	if _, err := refreshService.RefreshTokens(context.Background(), []string{"token-auto"}); err != nil {
+		t.Fatalf("manual refresh service failed: %v", err)
+	}
+	refreshedRecords, err := repo.GetAccounts(context.Background(), []string{"token-auto"})
+	if err != nil || len(refreshedRecords) != 1 {
+		t.Fatalf("get refreshed token failed: %v %#v", err, refreshedRecords)
+	}
+	if refreshedRecords[0].Status != account.StatusActive || refreshedRecords[0].StateReason != "" {
+		t.Fatalf("manual refresh should recover cooling token: %#v", refreshedRecords[0])
 	}
 
 	if _, err := repo.PatchAccounts(context.Background(), []account.Patch{{

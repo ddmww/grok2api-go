@@ -97,6 +97,8 @@ func (s *Service) RefreshTokens(ctx context.Context, tokens []string) (Result, e
 			Token:          record.Token,
 			Quota:          quotas,
 			Pool:           stringPtr(pool),
+			Status:         statusPtr(account.StatusActive),
+			StateReason:    stringPtr(""),
 			LastSyncAt:     int64Ptr(account.NowMS()),
 			UsageSyncDelta: intPtr(1),
 		}
@@ -116,3 +118,4 @@ func (s *Service) RefreshTokens(ctx context.Context, tokens []string) (Result, e
 func intPtr(value int) *int          { return &value }
 func int64Ptr(value int64) *int64    { return &value }
 func stringPtr(value string) *string { return &value }
+func statusPtr(value account.Status) *account.Status { return &value }
