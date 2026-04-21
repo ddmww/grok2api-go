@@ -238,7 +238,7 @@ func Mount(router *gin.Engine, state *app.State) {
 						"status":    "completed",
 					})
 				}
-				response := responsesObject(respID, spec.Name, "completed", output, responsesToolUsageOrEstimate(result.usage, messages, len(output)))
+				response := responsesObject(respID, spec.Name, "completed", output, responsesToolUsageOrEstimate(spec.Name, result.usage, messages, len(output)))
 				if len(result.searchSources) > 0 {
 					response["search_sources"] = result.searchSources
 				}
@@ -258,7 +258,7 @@ func Mount(router *gin.Engine, state *app.State) {
 				"role":    "assistant",
 				"content": []map[string]any{contentItem},
 			}}
-			response := responsesObject(respID, spec.Name, "completed", output, responsesUsageOrEstimate(result.usage, messages, result.content, result.reasoning))
+			response := responsesObject(respID, spec.Name, "completed", output, responsesUsageOrEstimate(spec.Name, result.usage, messages, result.content, result.reasoning))
 			if len(result.searchSources) > 0 {
 				response["search_sources"] = result.searchSources
 			}
@@ -995,7 +995,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			"created": time.Now().Unix(),
 			"model":   spec.Name,
 			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
-			"usage":   chatUsageOrEstimate(result.usage, request.Messages, result.content, result.reasoning),
+			"usage":   chatUsageOrEstimate(spec.Name, result.usage, request.Messages, result.content, result.reasoning),
 		}
 		if len(result.annotations) > 0 {
 			finalChunk["annotations"] = result.annotations
@@ -1132,7 +1132,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 				}
 				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 				refreshQuotaAsync(state, lease.Token)
-				response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(result.usage, messages, len(output)))
+				response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(spec.Name, result.usage, messages, len(output)))
 				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
 					response["search_sources"] = sources
 				}
@@ -1166,7 +1166,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		refreshQuotaAsync(state, lease.Token)
-		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(result.usage, messages, result.content, result.reasoning))
+		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(spec.Name, result.usage, messages, result.content, result.reasoning))
 		if len(result.searchSources) > 0 {
 			response["search_sources"] = result.searchSources
 		}

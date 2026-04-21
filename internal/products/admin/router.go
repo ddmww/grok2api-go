@@ -1208,8 +1208,11 @@ func listLocal(kind string, page, pageSize int) gin.H {
 			continue
 		}
 		info, _ := item.Info()
-		records = append(records, gin.H{"name": item.Name(), "size_bytes": info.Size(), "modified_at": info.ModTime().UnixMilli()})
+		records = append(records, gin.H{"name": item.Name(), "size_bytes": info.Size(), "modified_at": info.ModTime().Unix()})
 	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return intValue(records[i]["modified_at"]) > intValue(records[j]["modified_at"])
+	})
 	start := (page - 1) * pageSize
 	if start < 0 {
 		start = 0

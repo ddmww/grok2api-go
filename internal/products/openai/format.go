@@ -30,20 +30,20 @@ func buildUsage(promptTokens, completionTokens, reasoningTokens int) map[string]
 	}
 }
 
-func chatUsageOrEstimate(override map[string]any, prompt any, content, reasoning string) map[string]any {
+func chatUsageOrEstimate(modelName string, override map[string]any, prompt any, content, reasoning string) map[string]any {
 	if usage := normalizeChatUsage(override); usage != nil {
 		return usage
 	}
-	promptTokens := tokens.EstimateAny(prompt)
-	completionTokens := tokens.EstimateText(content) + tokens.EstimateText(reasoning)
-	return buildUsage(promptTokens, completionTokens, tokens.EstimateText(reasoning))
+	promptTokens := tokens.EstimateAnyByModel(modelName, prompt)
+	completionTokens := tokens.EstimateTextByModel(modelName, content) + tokens.EstimateTextByModel(modelName, reasoning)
+	return buildUsage(promptTokens, completionTokens, tokens.EstimateTextByModel(modelName, reasoning))
 }
 
-func chatToolUsageOrEstimate(override map[string]any, prompt any, toolCalls []ParsedToolCall) map[string]any {
+func chatToolUsageOrEstimate(modelName string, override map[string]any, prompt any, toolCalls []ParsedToolCall) map[string]any {
 	if usage := normalizeChatUsage(override); usage != nil {
 		return usage
 	}
-	return buildUsage(tokens.EstimateAny(prompt), maxInt(len(toolCalls)*16, 8), 0)
+	return buildUsage(tokens.EstimateAnyByModel(modelName, prompt), maxInt(len(toolCalls)*16, 8), 0)
 }
 
 func chatResponse(modelName, content, reasoning string, prompt any, usage map[string]any) map[string]any {
@@ -61,7 +61,7 @@ func chatResponse(modelName, content, reasoning string, prompt any, usage map[st
 			"message":       msg,
 			"finish_reason": "stop",
 		}},
-		"usage": chatUsageOrEstimate(usage, prompt, content, reasoning),
+		"usage": chatUsageOrEstimate(modelName, usage, prompt, content, reasoning),
 	}
 }
 
@@ -91,7 +91,7 @@ func chatToolResponse(modelName string, toolCalls []ParsedToolCall, prompt any, 
 			},
 			"finish_reason": "tool_calls",
 		}},
-		"usage": chatToolUsageOrEstimate(usage, prompt, toolCalls),
+		"usage": chatToolUsageOrEstimate(modelName, usage, prompt, toolCalls),
 	}
 }
 
@@ -121,20 +121,20 @@ func responsesUsage(promptTokens, outputTokens, reasoningTokens int) map[string]
 	}
 }
 
-func responsesUsageOrEstimate(override map[string]any, prompt any, content, reasoning string) map[string]any {
+func responsesUsageOrEstimate(modelName string, override map[string]any, prompt any, content, reasoning string) map[string]any {
 	if usage := normalizeResponsesUsage(override); usage != nil {
 		return usage
 	}
-	promptTokens := tokens.EstimateAny(prompt)
-	outputTokens := tokens.EstimateText(content) + tokens.EstimateText(reasoning)
-	return responsesUsage(promptTokens, outputTokens, tokens.EstimateText(reasoning))
+	promptTokens := tokens.EstimateAnyByModel(modelName, prompt)
+	outputTokens := tokens.EstimateTextByModel(modelName, content) + tokens.EstimateTextByModel(modelName, reasoning)
+	return responsesUsage(promptTokens, outputTokens, tokens.EstimateTextByModel(modelName, reasoning))
 }
 
-func responsesToolUsageOrEstimate(override map[string]any, prompt any, toolCalls int) map[string]any {
+func responsesToolUsageOrEstimate(modelName string, override map[string]any, prompt any, toolCalls int) map[string]any {
 	if usage := normalizeResponsesUsage(override); usage != nil {
 		return usage
 	}
-	return responsesUsage(tokens.EstimateAny(prompt), maxInt(toolCalls*12, 8), 0)
+	return responsesUsage(tokens.EstimateAnyByModel(modelName, prompt), maxInt(toolCalls*12, 8), 0)
 }
 
 func normalizeChatUsage(override map[string]any) map[string]any {

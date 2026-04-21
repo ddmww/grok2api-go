@@ -1218,7 +1218,10 @@ function _fmtBytes(bytes) {
 
 function _fmtTime(ts) {
   if (!ts) return tr('cache.na', null, '—');
-  return new Date(ts * 1000).toLocaleString(getLocale(), { hour12: false });
+  const numeric = Number(ts);
+  if (!Number.isFinite(numeric) || numeric <= 0) return tr('cache.na', null, '—');
+  const millis = numeric > 1e12 ? numeric : numeric * 1000;
+  return new Date(millis).toLocaleString(getLocale(), { hour12: false });
 }
 
 function _maskToken(token) {

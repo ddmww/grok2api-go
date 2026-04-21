@@ -248,7 +248,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
 	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
 	excluded := map[string]struct{}{}
-	inputTokens := tokens.EstimateText(message)
+	inputTokens := tokens.EstimateTextByModel(spec.Name, message)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := state.Runtime.ReserveWithExclude(spec, excluded)
@@ -299,7 +299,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		}
 		result.searchSources = adapter.SearchSourcesList()
 		if result.outputTokens == 0 {
-			result.outputTokens = tokens.EstimateText(result.content) + tokens.EstimateText(result.reasoning)
+			result.outputTokens = tokens.EstimateTextByModel(spec.Name, result.content) + tokens.EstimateTextByModel(spec.Name, result.reasoning)
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		return result, nil
