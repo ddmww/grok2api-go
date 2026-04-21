@@ -71,23 +71,32 @@ func (r *Runtime) pick(resource bool) string {
 
 func (r *Runtime) Client(resource bool) (*http.Client, string, error) {
 	proxyURL := strings.TrimSpace(r.pick(resource))
+	client, err := r.ClientForProxyURL(proxyURL)
+	if err != nil {
+		return nil, "", err
+	}
+	return client, proxyURL, nil
+}
+
+func (r *Runtime) ClientForProxyURL(proxyURL string) (*http.Client, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
 	key := affinityKey(proxyURL)
 	r.mu.Lock()
 	if client, ok := r.cache[key]; ok {
 		r.mu.Unlock()
-		return client, proxyURL, nil
+		return client, nil
 	}
 	r.mu.Unlock()
 
 	transport, err := newTransport(r.cfg, proxyURL)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	client := &http.Client{Transport: transport}
 	r.mu.Lock()
 	r.cache[key] = client
 	r.mu.Unlock()
-	return client, proxyURL, nil
+	return client, nil
 }
 
 func (r *Runtime) ProxyURL(resource bool) string {

@@ -500,6 +500,40 @@ func parseRetryCodes(raw string) map[int]struct{} {
 	return out
 }
 
+func retryCodesFromConfig(state *app.State) map[int]struct{} {
+	if state == nil || state.Config == nil {
+		return parseRetryCodes("429,401,502,503")
+	}
+	if raw := strings.TrimSpace(state.Config.GetString("retry.on_codes", "")); raw != "" {
+		return parseRetryCodes(raw)
+	}
+	out := map[int]struct{}{}
+	addCodes := func(values []string) {
+		for _, value := range values {
+			code, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil {
+				out[code] = struct{}{}
+			}
+		}
+	}
+	addCodes(state.Config.GetStringSlice("retry.retry_status_codes"))
+	addCodes(state.Config.GetStringSlice("retry.token_switch_status_codes"))
+	if len(out) == 0 {
+		return parseRetryCodes("429,401,502,503")
+	}
+	return out
+}
+
+func maxRetriesFromConfig(state *app.State) int {
+	if state == nil || state.Config == nil {
+		return 1
+	}
+	if value := state.Config.GetInt("retry.max_retries", -1); value >= 0 {
+		return maxInt(value, 0)
+	}
+	return maxInt(state.Config.GetInt("retry.max_retry", 1), 0)
+}
+
 func shouldRetry(err error, retryCodes map[int]struct{}, attempt, maxRetries int) bool {
 	if attempt >= maxRetries {
 		return false
@@ -619,8 +653,8 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		defer cancel()
 	}
 	message, toolNames := prepareMessage(messages, tools, toolChoice)
-	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
-	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	retryCodes := retryCodesFromConfig(state)
+	maxRetries := maxRetriesFromConfig(state)
 	excluded := map[string]struct{}{}
 	var lastRetryErr error
 	session, err := state.XAI.NewChatSession()
@@ -896,10 +930,16 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 	c.Header("Connection", "keep-alive")
 	id := responseID("chatcmpl")
 	message, toolNames := prepareMessage(request.Messages, request.Tools, request.ToolChoice)
-	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
-	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	retryCodes := retryCodesFromConfig(state)
+	maxRetries := maxRetriesFromConfig(state)
 	excluded := map[string]struct{}{}
 	thinkingEnabled := state.Config.GetBool("features.thinking", true)
+	session, err := state.XAI.NewChatSession()
+	if err != nil {
+		writeOpenAIError(c, err)
+		return
+	}
+	defer session.Close()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := reserveLease(state, spec, excluded)
@@ -908,7 +948,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			return
 		}
 
-		lines, errCh := state.XAI.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
+		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
 		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
 		outputStarted := false
@@ -1075,9 +1115,15 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 	c.Header("Connection", "keep-alive")
 	id := responseID("resp")
 	message, toolNames := prepareMessage(messages, tools, toolChoice)
-	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
-	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	retryCodes := retryCodesFromConfig(state)
+	maxRetries := maxRetriesFromConfig(state)
 	excluded := map[string]struct{}{}
+	session, err := state.XAI.NewChatSession()
+	if err != nil {
+		writeOpenAIError(c, err)
+		return
+	}
+	defer session.Close()
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := reserveLease(state, spec, excluded)
 		if err != nil {
@@ -1085,7 +1131,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 			return
 		}
 
-		lines, errCh := state.XAI.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
+		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
 		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
 		itemID := responseID("msg")

@@ -58,6 +58,19 @@ type closerFunc func() error
 
 func (fn closerFunc) Close() error { return fn() }
 
+func transportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if upstream, ok := err.(*UpstreamError); ok {
+		return upstream
+	}
+	return &UpstreamError{
+		Status: http.StatusBadGateway,
+		Body:   err.Error(),
+	}
+}
+
 func (r *readCloserChain) Close() error {
 	var firstErr error
 	for _, closer := range r.closers {
@@ -176,7 +189,8 @@ func (c *Client) do(ctx context.Context, method, urlValue, token string, body []
 	request.Header = headers
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		c.proxy.Reset(proxyKey)
+		return nil, transportError(err)
 	}
 	if isResettableStatus(c.cfg, response.StatusCode) {
 		c.proxy.Reset(proxyKey)
@@ -259,7 +273,7 @@ func (c *Client) ChatStream(ctx context.Context, token string, payload map[strin
 
 func (c *Client) NewChatSession() (*ChatSession, error) {
 	proxyURL := strings.TrimSpace(c.proxy.ProxyURL(false))
-	client, err := c.newScopedHTTPClient(proxyURL)
+	client, err := c.proxy.ClientForProxyURL(proxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -270,47 +284,27 @@ func (c *Client) NewChatSession() (*ChatSession, error) {
 	}, nil
 }
 
-func (c *Client) newScopedHTTPClient(proxyURL string) (*http.Client, error) {
-	transport, err := proxy.NewTransport(c.cfg, proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	return &http.Client{Transport: transport}, nil
-}
-
 func (s *ChatSession) Close() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	client := s.client
 	s.client = nil
 	s.mu.Unlock()
-	closeHTTPClient(client)
-}
-
-func closeHTTPClient(client *http.Client) {
-	if client == nil {
-		return
-	}
-	if transport, ok := client.Transport.(*http.Transport); ok {
-		transport.CloseIdleConnections()
-	}
 }
 
 func (s *ChatSession) reset() error {
 	if s == nil || s.parent == nil {
 		return nil
 	}
-	client, err := s.parent.newScopedHTTPClient(s.proxyURL)
+	s.parent.proxy.Reset(s.proxyURL)
+	client, err := s.parent.proxy.ClientForProxyURL(s.proxyURL)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	old := s.client
 	s.client = client
 	s.mu.Unlock()
-	closeHTTPClient(old)
 	return nil
 }
 
@@ -343,7 +337,8 @@ func (s *ChatSession) ChatStream(ctx context.Context, token string, payload map[
 		request.Header = s.parent.buildHeaders(s.proxyURL, token, "application/json", "https://grok.com", "https://grok.com/")
 		resp, err := client.Do(request)
 		if err != nil {
-			errCh <- err
+			_ = s.reset()
+			errCh <- transportError(err)
 			return
 		}
 		if isResettableStatus(s.parent.cfg, resp.StatusCode) {
@@ -375,7 +370,8 @@ func (s *ChatSession) ChatStream(ctx context.Context, token string, payload map[
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			errCh <- err
+			_ = s.reset()
+			errCh <- transportError(err)
 		}
 	}()
 	return out, errCh
@@ -394,7 +390,8 @@ func (s *ChatSession) postJSON(ctx context.Context, path, token string, payload 
 	request.Header = s.parent.buildHeaders(s.proxyURL, token, "application/json", "https://grok.com", "https://grok.com/")
 	resp, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		_ = s.reset()
+		return nil, transportError(err)
 	}
 	if isResettableStatus(s.parent.cfg, resp.StatusCode) {
 		if resetErr := s.reset(); resetErr != nil {

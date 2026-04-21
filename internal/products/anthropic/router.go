@@ -251,8 +251,8 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		message = injectAnthropicToolPrompt(message, buildAnthropicToolPrompt(tools, request.ToolChoice))
 		toolNames = extractAnthropicToolNames(tools)
 	}
-	retryCodes := parseRetryCodes(state.Config.GetString("retry.on_codes", "429,503"))
-	maxRetries := maxInt(state.Config.GetInt("retry.max_retries", 1), 0)
+	retryCodes := retryCodesFromConfig(state)
+	maxRetries := maxRetriesFromConfig(state)
 	excluded := map[string]struct{}{}
 	inputTokens := tokens.EstimateTextByModel(spec.Name, message)
 	var lastRetryErr error
@@ -996,6 +996,40 @@ func parseRetryCodes(raw string) map[int]struct{} {
 		}
 	}
 	return out
+}
+
+func retryCodesFromConfig(state *app.State) map[int]struct{} {
+	if state == nil || state.Config == nil {
+		return parseRetryCodes("429,401,502,503")
+	}
+	if raw := strings.TrimSpace(state.Config.GetString("retry.on_codes", "")); raw != "" {
+		return parseRetryCodes(raw)
+	}
+	out := map[int]struct{}{}
+	addCodes := func(values []string) {
+		for _, value := range values {
+			var code int
+			if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &code); err == nil {
+				out[code] = struct{}{}
+			}
+		}
+	}
+	addCodes(state.Config.GetStringSlice("retry.retry_status_codes"))
+	addCodes(state.Config.GetStringSlice("retry.token_switch_status_codes"))
+	if len(out) == 0 {
+		return parseRetryCodes("429,401,502,503")
+	}
+	return out
+}
+
+func maxRetriesFromConfig(state *app.State) int {
+	if state == nil || state.Config == nil {
+		return 1
+	}
+	if value := state.Config.GetInt("retry.max_retries", -1); value >= 0 {
+		return maxInt(value, 0)
+	}
+	return maxInt(state.Config.GetInt("retry.max_retry", 1), 0)
 }
 
 func maxInt(a, b int) int {
