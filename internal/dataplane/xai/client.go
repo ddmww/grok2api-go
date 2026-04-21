@@ -268,12 +268,26 @@ func (c *Client) ChatStream(ctx context.Context, token string, payload map[strin
 		close(errCh)
 		return out, errCh
 	}
-	return session.ChatStream(ctx, token, payload)
+	lines, sourceErrCh := session.ChatStream(ctx, token, payload)
+	out := make(chan string, 32)
+	errCh := make(chan error, 1)
+	go func() {
+		defer session.Close()
+		defer close(out)
+		defer close(errCh)
+		for line := range lines {
+			out <- line
+		}
+		if err := <-sourceErrCh; err != nil {
+			errCh <- err
+		}
+	}()
+	return out, errCh
 }
 
 func (c *Client) NewChatSession() (*ChatSession, error) {
 	proxyURL := strings.TrimSpace(c.proxy.ProxyURL(false))
-	client, err := c.proxy.ClientForProxyURL(proxyURL)
+	client, err := c.proxy.NewSessionClientForProxyURL(proxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -289,22 +303,25 @@ func (s *ChatSession) Close() {
 		return
 	}
 	s.mu.Lock()
+	client := s.client
 	s.client = nil
 	s.mu.Unlock()
+	closeHTTPClient(client)
 }
 
 func (s *ChatSession) reset() error {
 	if s == nil || s.parent == nil {
 		return nil
 	}
-	s.parent.proxy.Reset(s.proxyURL)
-	client, err := s.parent.proxy.ClientForProxyURL(s.proxyURL)
+	client, err := s.parent.proxy.NewSessionClientForProxyURL(s.proxyURL)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
+	oldClient := s.client
 	s.client = client
 	s.mu.Unlock()
+	closeHTTPClient(oldClient)
 	return nil
 }
 
@@ -315,6 +332,15 @@ func (s *ChatSession) currentClient() *http.Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.client
+}
+
+func closeHTTPClient(client *http.Client) {
+	if client == nil {
+		return
+	}
+	if transport, ok := client.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
+	}
 }
 
 func (s *ChatSession) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {

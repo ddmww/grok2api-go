@@ -173,6 +173,29 @@ func TestOpenAIRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("chat completions sequential requests", func(t *testing.T) {
+		body := map[string]any{
+			"model": "grok-4.20-fast",
+			"messages": []map[string]any{
+				{"role": "user", "content": "hello"},
+			},
+		}
+		payload, _ := json.Marshal(body)
+		for index := 0; index < 2; index++ {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+			req.Header.Set("Authorization", "Bearer test-api-key")
+			req.Header.Set("Content-Type", "application/json")
+			resp := testutil.NewCloseNotifyRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("request %d unexpected status: %d body=%s", index+1, resp.Code, resp.Body.String())
+			}
+			if !strings.Contains(resp.Body.String(), "Hello from fake grok") {
+				t.Fatalf("request %d chat body mismatch: %s", index+1, resp.Body.String())
+			}
+		}
+	})
+
 	t.Run("chat completions model response fallback", func(t *testing.T) {
 		body := map[string]any{
 			"model": "grok-4.20-fast",
@@ -329,6 +352,47 @@ func TestOpenAIRoutes(t *testing.T) {
 		resetImageTestTokens(t)
 		fake.AppChatImageMode = "final"
 		fake.WebsocketImageMode = "final"
+		body := map[string]any{
+			"model":           "grok-imagine-image-lite",
+			"prompt":          "generate image",
+			"n":               1,
+			"response_format": "url",
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer test-api-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp := testutil.NewCloseNotifyRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), `"data"`) {
+			t.Fatalf("unexpected body: %s", resp.Body.String())
+		}
+	})
+
+	t.Run("image generation app_chat backend", func(t *testing.T) {
+		resetImageTestTokens(t)
+		fake.AppChatImageMode = "final"
+		fake.WebsocketImageMode = "preview"
+		if err := cfg.Update(context.Background(), map[string]any{
+			"image": map[string]any{
+				"backend": "app_chat",
+			},
+		}); err != nil {
+			t.Fatalf("set image backend: %v", err)
+		}
+		defer func() {
+			if err := cfg.Update(context.Background(), map[string]any{
+				"image": map[string]any{
+					"backend": "auto",
+				},
+			}); err != nil {
+				t.Fatalf("reset image backend: %v", err)
+			}
+		}()
+
 		body := map[string]any{
 			"model":           "grok-imagine-image-lite",
 			"prompt":          "generate image",

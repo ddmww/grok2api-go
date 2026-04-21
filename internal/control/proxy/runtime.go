@@ -99,6 +99,14 @@ func (r *Runtime) ClientForProxyURL(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
+func (r *Runtime) NewSessionClientForProxyURL(proxyURL string) (*http.Client, error) {
+	transport, err := newTransport(r.cfg, strings.TrimSpace(proxyURL))
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
 func (r *Runtime) ProxyURL(resource bool) string {
 	return strings.TrimSpace(r.pick(resource))
 }
