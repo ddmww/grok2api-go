@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ddmww/grok2api-go/internal/app"
 	"github.com/ddmww/grok2api-go/internal/control/account"
 	"github.com/ddmww/grok2api-go/internal/control/proxy"
+	"github.com/ddmww/grok2api-go/internal/control/refresh"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
@@ -81,7 +83,7 @@ func TestOpenAIRoutes(t *testing.T) {
 		Config:  cfg,
 		Repo:    repo,
 		Runtime: runtime,
-		Refresh: nil,
+		Refresh: refresh.New(repo, runtime, cfg, xaiClient),
 		Proxy:   proxyRuntime,
 		XAI:     xaiClient,
 		Tasks:   tasks.NewStore(),
@@ -201,6 +203,50 @@ func TestOpenAIRoutes(t *testing.T) {
 			if !strings.Contains(resp.Body.String(), "Hello from fake grok") {
 				t.Fatalf("request %d chat body mismatch: %s", index+1, resp.Body.String())
 			}
+		}
+	})
+
+	t.Run("chat completions syncs only selected token mode", func(t *testing.T) {
+		resetImageTestTokens(t)
+		beforeFast := fake.RateLimitCallCount("token-1", "fast")
+		beforeOtherFast := fake.RateLimitCallCount("token-2", "fast")
+		beforeSuperFast := fake.RateLimitCallCount("token-super", "fast")
+		beforeAuto := fake.RateLimitCallCount("token-1", "auto")
+		beforeOtherAuto := fake.RateLimitCallCount("token-2", "auto")
+		beforeSuperAuto := fake.RateLimitCallCount("token-super", "auto")
+
+		body := map[string]any{
+			"model": "grok-4.20-fast",
+			"messages": []map[string]any{
+				{"role": "user", "content": "hello"},
+			},
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer test-api-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp := testutil.NewCloseNotifyRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+
+		time.Sleep(150 * time.Millisecond)
+
+		fastCalls := (fake.RateLimitCallCount("token-1", "fast") - beforeFast) +
+			(fake.RateLimitCallCount("token-2", "fast") - beforeOtherFast) +
+			(fake.RateLimitCallCount("token-super", "fast") - beforeSuperFast)
+		if fastCalls != 1 {
+			t.Fatalf("expected exactly one fast quota sync across selected tokens, got %d", fastCalls)
+		}
+		if got := fake.RateLimitCallCount("token-1", "auto") - beforeAuto; got != 0 {
+			t.Fatalf("expected no auto quota sync for token-1, got %d", got)
+		}
+		if got := fake.RateLimitCallCount("token-2", "auto") - beforeOtherAuto; got != 0 {
+			t.Fatalf("expected no quota sync for token-2, got %d", got)
+		}
+		if got := fake.RateLimitCallCount("token-super", "auto") - beforeSuperAuto; got != 0 {
+			t.Fatalf("expected no auto quota sync for token-super, got %d", got)
 		}
 	})
 

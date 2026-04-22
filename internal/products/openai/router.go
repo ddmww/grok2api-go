@@ -596,14 +596,14 @@ func feedbackForError(err error) account.Feedback {
 	return feedback
 }
 
-func refreshQuotaAsync(state *app.State, token string) {
-	if state == nil || state.Refresh == nil || strings.TrimSpace(token) == "" {
+func syncUsedQuotaAsync(state *app.State, token, mode string) {
+	if state == nil || state.Refresh == nil || strings.TrimSpace(token) == "" || strings.TrimSpace(mode) == "" {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, _ = state.Refresh.RefreshOnDemand(ctx)
+		_ = state.Refresh.RefreshCall(ctx, token, mode)
 	}()
 }
 
@@ -764,7 +764,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		}
 		result.searchSources = adapter.SearchSourcesList()
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-		refreshQuotaAsync(state, lease.Token)
+		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		return result, nil
 	}
 
@@ -1075,7 +1075,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 					}
 				}
 				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-				refreshQuotaAsync(state, lease.Token)
+				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 				payload := map[string]any{
 					"id":      id,
 					"object":  "chat.completion.chunk",
@@ -1116,7 +1116,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		result.searchSources = adapter.SearchSourcesList()
 
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-		refreshQuotaAsync(state, lease.Token)
+		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		finalChunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",
@@ -1265,7 +1265,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 					}
 				}
 				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-				refreshQuotaAsync(state, lease.Token)
+				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 				response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(spec.Name, result.usage, messages, len(output)))
 				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
 					response["search_sources"] = sources
@@ -1299,7 +1299,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 			return
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-		refreshQuotaAsync(state, lease.Token)
+		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(spec.Name, result.usage, messages, result.content, result.reasoning))
 		if len(result.searchSources) > 0 {
 			response["search_sources"] = result.searchSources

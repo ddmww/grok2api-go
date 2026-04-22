@@ -336,6 +336,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 			result.outputTokens = tokens.EstimateTextByModel(spec.Name, result.content) + tokens.EstimateTextByModel(spec.Name, result.reasoning)
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		return result, nil
 	}
 	return runResult{}, fmt.Errorf("no available accounts for this model tier")
@@ -371,6 +372,17 @@ func reserveAnthropicLease(state *app.State, spec model.Spec, excluded map[strin
 		return nil, err
 	}
 	return tryReserve()
+}
+
+func syncUsedQuotaAsync(state *app.State, token, mode string) {
+	if state == nil || state.Refresh == nil || strings.TrimSpace(token) == "" || strings.TrimSpace(mode) == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = state.Refresh.RefreshCall(ctx, token, mode)
+	}()
 }
 
 func anthropicUsage(result runResult) map[string]any {

@@ -522,6 +522,18 @@ func (s *RequestSession) FetchQuotaProbe(ctx context.Context, token string) (acc
 	return window, nil
 }
 
+func (s *RequestSession) FetchModeQuota(ctx context.Context, token, mode string) (account.QuotaWindow, error) {
+	body, err := s.postJSON(ctx, "/rest/rate-limits", token, map[string]any{"modelName": mode}, "https://grok.com/")
+	if err != nil {
+		return account.QuotaWindow{}, err
+	}
+	window, ok := parseQuotaResponse(body)
+	if !ok {
+		return account.QuotaWindow{}, errors.New("rate limits returned no quota data")
+	}
+	return window, nil
+}
+
 func (s *RequestSession) FetchDetailedQuotas(ctx context.Context, token, pool string, seed map[string]account.QuotaWindow) (map[string]account.QuotaWindow, error) {
 	out := map[string]account.QuotaWindow{}
 	for key, value := range seed {

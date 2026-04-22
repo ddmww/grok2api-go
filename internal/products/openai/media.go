@@ -491,7 +491,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 		}
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
 		if meta == nil || !meta.SawRateLimit {
-			refreshQuotaAsync(state, lease.Token)
+			syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		}
 		outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 		if err != nil {
@@ -547,7 +547,7 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 		return nil, err
 	}
 	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-	refreshQuotaAsync(state, lease.Token)
+	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 	if err != nil {
 		return nil, err
@@ -593,7 +593,7 @@ func createVideo(ctx context.Context, state *app.State, spec model.Spec, prompt 
 		return nil, err
 	}
 	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-	refreshQuotaAsync(state, lease.Token)
+	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	job := &videoJob{
 		ID:        responseID("video"),
 		Model:     spec.Name,

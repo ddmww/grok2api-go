@@ -71,6 +71,7 @@ type FakeGrokServer struct {
 	ImageEditMode       string
 	AppChatImageModes   map[string]string
 	WebsocketImageModes map[string]string
+	RateLimitCalls      map[string]int
 }
 
 func NewFakeGrokServer() *FakeGrokServer {
@@ -83,6 +84,7 @@ func NewFakeGrokServer() *FakeGrokServer {
 		ImageEditMode:       "final",
 		AppChatImageModes:   map[string]string{},
 		WebsocketImageModes: map[string]string{},
+		RateLimitCalls:      map[string]int{},
 	}
 
 	mux := http.NewServeMux()
@@ -285,6 +287,11 @@ func (f *FakeGrokServer) handleRateLimits(w http.ResponseWriter, r *http.Request
 	var payload map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&payload)
 	modelName, _ := payload["modelName"].(string)
+	token := extractSSOToken(r.Header.Get("Cookie"))
+	key := token + "|" + modelName
+	f.mu.Lock()
+	f.RateLimitCalls[key]++
+	f.mu.Unlock()
 	total := 20
 	switch modelName {
 	case "fast":
@@ -299,6 +306,12 @@ func (f *FakeGrokServer) handleRateLimits(w http.ResponseWriter, r *http.Request
 		"totalQueries":      total,
 		"windowSizeSeconds": 3600,
 	})
+}
+
+func (f *FakeGrokServer) RateLimitCallCount(token, mode string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.RateLimitCalls[token+"|"+mode]
 }
 
 func (f *FakeGrokServer) handleAssets(w http.ResponseWriter, _ *http.Request) {

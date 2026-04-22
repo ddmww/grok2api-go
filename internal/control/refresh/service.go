@@ -3,6 +3,8 @@ package refresh
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,6 +139,63 @@ func (s *Service) RefreshTokens(ctx context.Context, tokens []string) (Result, e
 	return s.refreshRecords(ctx, records)
 }
 
+func (s *Service) RefreshCall(ctx context.Context, token, mode string) error {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	records, err := s.repo.GetAccounts(ctx, []string{token})
+	if err != nil || len(records) == 0 {
+		return err
+	}
+	record := records[0]
+	if record.IsDeleted() {
+		return nil
+	}
+	if mode = strings.TrimSpace(mode); mode == "" {
+		mode = "auto"
+	}
+	if !slices.Contains(account.SupportedModes(record.Pool), mode) {
+		return nil
+	}
+	session, err := s.xai.SharedUsageSession()
+	if err != nil {
+		return err
+	}
+	now := account.NowMS()
+	window, err := session.FetchModeQuota(ctx, record.Token, mode)
+	if err != nil {
+		switch {
+		case isStatus(err, 401):
+			return s.applyRefreshPatches(ctx, []account.Patch{{
+				Token:          record.Token,
+				Status:         statusPtr(account.StatusExpired),
+				StateReason:    stringPtr("rate_limits_auth_failed"),
+				LastSyncAt:     int64Ptr(now),
+				LastFailAt:     int64Ptr(now),
+				LastFailReason: stringPtr(err.Error()),
+				UsageSyncDelta: intPtr(1),
+				ExtMerge: map[string]any{
+					"expired_at":     now,
+					"expired_reason": "rate_limits_auth_failed",
+				},
+			}})
+		default:
+			return err
+		}
+	}
+	return s.applyRefreshPatches(ctx, []account.Patch{{
+		Token:          record.Token,
+		Quota:          map[string]account.QuotaWindow{mode: window},
+		Status:         statusPtr(account.StatusActive),
+		StateReason:    stringPtr(""),
+		LastSyncAt:     int64Ptr(now),
+		UsageSyncDelta: intPtr(1),
+		ExtMerge: map[string]any{
+			"cooldown_until": int64(0),
+		},
+	}})
+}
+
 func (s *Service) refreshManageable(ctx context.Context) (Result, error) {
 	page := 1
 	pageSize := 1000
@@ -209,7 +268,6 @@ func (s *Service) refreshRecords(ctx context.Context, records []account.Record) 
 	close(outcomes)
 
 	patches := make([]account.Patch, 0, len(candidates))
-	refreshedTokens := make([]string, 0, len(candidates))
 	result := Result{}
 	for outcome := range outcomes {
 		result.Checked += outcome.result.Checked
@@ -218,23 +276,41 @@ func (s *Service) refreshRecords(ctx context.Context, records []account.Record) 
 		result.Failed += outcome.result.Failed
 		if outcome.patch != nil {
 			patches = append(patches, *outcome.patch)
-			refreshedTokens = append(refreshedTokens, outcome.token)
 		}
 	}
 
 	if len(patches) > 0 {
-		if _, err := s.repo.PatchAccounts(ctx, patches); err != nil {
+		if err := s.applyRefreshPatches(ctx, patches); err != nil {
 			return result, err
-		}
-		updated, err := s.repo.GetAccounts(ctx, refreshedTokens)
-		if err != nil {
-			return result, err
-		}
-		for _, record := range updated {
-			s.runtime.ReplaceRecord(record)
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) applyRefreshPatches(ctx context.Context, patches []account.Patch) error {
+	if len(patches) == 0 {
+		return nil
+	}
+	if _, err := s.repo.PatchAccounts(ctx, patches); err != nil {
+		return err
+	}
+	tokens := make([]string, 0, len(patches))
+	for _, patch := range patches {
+		if strings.TrimSpace(patch.Token) != "" {
+			tokens = append(tokens, patch.Token)
+		}
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+	updated, err := s.repo.GetAccounts(ctx, tokens)
+	if err != nil {
+		return err
+	}
+	for _, record := range updated {
+		s.runtime.ReplaceRecord(record)
+	}
+	return nil
 }
 
 func (s *Service) refreshOne(ctx context.Context, session *xai.RequestSession, record account.Record) refreshOutcome {
