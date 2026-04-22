@@ -234,35 +234,40 @@ func (c *Client) UploadFromInput(ctx context.Context, token, input string) (*Upl
 		return nil, err
 	}
 	defer release()
+	session, err := c.newRequestSession(true)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
 
 	input = strings.TrimSpace(input)
 	switch {
 	case input == "":
 		return nil, fmt.Errorf("empty file input")
 	case isRemoteURL(input):
-		data, contentType, err := c.DownloadContent(ctx, token, input)
+		data, contentType, err := session.DownloadContent(ctx, token, input)
 		if err != nil {
 			return nil, err
 		}
 		filename := sanitizeUploadName(filepath.Base(strings.Split(input, "?")[0]), "download.bin")
 		b64 := base64.StdEncoding.EncodeToString(data)
-		return c.uploadBase64(ctx, token, filename, contentType, b64)
+		return session.uploadBase64(ctx, token, filename, contentType, b64)
 	default:
 		filename, mimeType, b64, err := parseDataURI(input)
 		if err != nil {
 			return nil, err
 		}
-		return c.uploadBase64(ctx, token, filename, mimeType, b64)
+		return session.uploadBase64(ctx, token, filename, mimeType, b64)
 	}
 }
 
-func (c *Client) uploadBase64(ctx context.Context, token, filename, mimeType, b64 string) (*UploadedAsset, error) {
+func (s *RequestSession) uploadBase64(ctx context.Context, token, filename, mimeType, b64 string) (*UploadedAsset, error) {
 	payload := map[string]any{
 		"fileName":     sanitizeUploadName(filename, "upload.bin"),
 		"fileMimeType": mimeType,
 		"content":      b64,
 	}
-	result, err := c.postJSON(ctx, "/rest/app-chat/upload-file", token, payload, "https://grok.com/")
+	result, err := s.postJSON(ctx, "/rest/app-chat/upload-file", token, payload, "https://grok.com/")
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +279,7 @@ func (c *Client) uploadBase64(ctx context.Context, token, filename, mimeType, b6
 	return &UploadedAsset{
 		FileID:  fileID,
 		FileURI: fileURI,
-		URL:     resolveAssetReferenceWithConfig(c.cfg, token, fileID, fileURI),
+		URL:     resolveAssetReferenceWithConfig(s.parent.cfg, token, fileID, fileURI),
 	}, nil
 }
 
@@ -305,7 +310,16 @@ func (c *Client) CreateMediaLink(ctx context.Context, token, postID string) (map
 }
 
 func (c *Client) DownloadContent(ctx context.Context, token, rawURL string) ([]byte, string, error) {
-	ctx, cancel := c.withConfigTimeout(ctx, "asset.download_timeout", 60)
+	session, err := c.newRequestSession(true)
+	if err != nil {
+		return nil, "", err
+	}
+	defer session.Close()
+	return session.DownloadContent(ctx, token, rawURL)
+}
+
+func (s *RequestSession) DownloadContent(ctx context.Context, token, rawURL string) ([]byte, string, error) {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "asset.download_timeout", 60)
 	defer cancel()
 	target := strings.TrimSpace(rawURL)
 	if target == "" {
@@ -314,7 +328,7 @@ func (c *Client) DownloadContent(ctx context.Context, token, rawURL string) ([]b
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = "https://assets.grok.com/" + strings.TrimLeft(target, "/")
 	}
-	resp, err := c.doRequest(ctx, http.MethodGet, target, token, "application/json", "https://grok.com", "https://grok.com/", nil, true)
+	resp, err := s.doRequest(ctx, http.MethodGet, target, token, "application/json", "https://grok.com", "https://grok.com/", nil)
 	if err != nil {
 		return nil, "", err
 	}

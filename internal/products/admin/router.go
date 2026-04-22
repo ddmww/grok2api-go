@@ -1225,12 +1225,17 @@ func executeBatchItem(ctx context.Context, state *app.State, kind string, enable
 		}
 		return map[string]any{"refreshed": result.Refreshed}, nil, nil
 	case "nsfw":
+		session, err := state.XAI.NewRequestSession(false)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer session.Close()
 		if enabled {
-			if err := state.XAI.SetBirthDate(ctx, token); err != nil {
+			if err := session.SetBirthDate(ctx, token); err != nil {
 				return nil, nil, err
 			}
 		}
-		if err := state.XAI.SetNSFW(ctx, token, enabled); err != nil {
+		if err := session.SetNSFW(ctx, token, enabled); err != nil {
 			return nil, nil, err
 		}
 		addTags := []string{"nsfw"}
@@ -1241,7 +1246,12 @@ func executeBatchItem(ctx context.Context, state *app.State, kind string, enable
 		patch := &account.Patch{Token: token, AddTags: addTags, RemoveTags: removeTags}
 		return map[string]any{"success": true, "tagged": enabled}, patch, nil
 	case "cache-clear":
-		items, err := state.XAI.ListAssets(ctx, token)
+		session, err := state.XAI.NewRequestSession(true)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer session.Close()
+		items, err := session.ListAssets(ctx, token)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1254,7 +1264,7 @@ func executeBatchItem(ctx context.Context, state *app.State, kind string, enable
 			if assetID == "" {
 				continue
 			}
-			if err := state.XAI.DeleteAsset(ctx, token, assetID); err == nil {
+			if err := session.DeleteAsset(ctx, token, assetID); err == nil {
 				deleted++
 			}
 		}

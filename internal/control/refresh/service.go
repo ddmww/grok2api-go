@@ -73,6 +73,9 @@ func (s *Service) Start() {
 func (s *Service) Stop() {
 	close(s.stopCh)
 	s.wg.Wait()
+	if s.xai != nil {
+		s.xai.CloseSharedUsageSession()
+	}
 }
 
 func (s *Service) RefreshOnImport(ctx context.Context, tokens []string) (Result, error) {
@@ -176,11 +179,10 @@ func (s *Service) refreshRecords(ctx context.Context, records []account.Record) 
 	if len(candidates) == 0 {
 		return Result{}, nil
 	}
-	session, err := s.xai.NewChatSession()
+	session, err := s.xai.SharedUsageSession()
 	if err != nil {
 		return Result{}, err
 	}
-	defer session.Close()
 
 	concurrency := s.cfg.GetInt("account.refresh.usage_concurrency", 20)
 	if concurrency <= 0 {
@@ -235,7 +237,7 @@ func (s *Service) refreshRecords(ctx context.Context, records []account.Record) 
 	return result, nil
 }
 
-func (s *Service) refreshOne(ctx context.Context, session *xai.ChatSession, record account.Record) refreshOutcome {
+func (s *Service) refreshOne(ctx context.Context, session *xai.RequestSession, record account.Record) refreshOutcome {
 	now := account.NowMS()
 	outcome := refreshOutcome{
 		token:  record.Token,

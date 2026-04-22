@@ -27,19 +27,30 @@ const (
 )
 
 type Client struct {
-	cfg        *config.Service
-	proxy      *proxy.Runtime
-	uploadOnce sync.Once
-	uploadSem  chan struct{}
-	listOnce   sync.Once
-	listSem    chan struct{}
-	deleteOnce sync.Once
-	deleteSem  chan struct{}
+	cfg             *config.Service
+	proxy           *proxy.Runtime
+	uploadOnce      sync.Once
+	uploadSem       chan struct{}
+	listOnce        sync.Once
+	listSem         chan struct{}
+	deleteOnce      sync.Once
+	deleteSem       chan struct{}
+	usageMu         sync.Mutex
+	usageSession    *RequestSession
+	usageSessionKey string
 }
 
 type ChatSession struct {
 	parent   *Client
 	proxyURL string
+	mu       sync.Mutex
+	client   *http.Client
+}
+
+type RequestSession struct {
+	parent   *Client
+	proxyURL string
+	resource bool
 	mu       sync.Mutex
 	client   *http.Client
 }
@@ -93,6 +104,77 @@ func (e *UpstreamError) Error() string {
 
 func NewClient(cfg *config.Service, proxyRuntime *proxy.Runtime) *Client {
 	return &Client{cfg: cfg, proxy: proxyRuntime}
+}
+
+func (c *Client) proxyURL(resource bool) string {
+	if c == nil || c.proxy == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.proxy.ProxyURL(resource))
+}
+
+func (c *Client) newRequestSession(resource bool) (*RequestSession, error) {
+	proxyURL := c.proxyURL(resource)
+	client, err := c.proxy.NewSessionClientForProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return &RequestSession{
+		parent:   c,
+		proxyURL: proxyURL,
+		resource: resource,
+		client:   client,
+	}, nil
+}
+
+func (c *Client) NewRequestSession(resource bool) (*RequestSession, error) {
+	return c.newRequestSession(resource)
+}
+
+func (c *Client) usageSessionAffinityKey() string {
+	return "usage:" + c.proxyURL(false)
+}
+
+func (c *Client) SharedUsageSession() (*RequestSession, error) {
+	desiredKey := c.usageSessionAffinityKey()
+
+	c.usageMu.Lock()
+	session := c.usageSession
+	if session != nil && c.usageSessionKey == desiredKey {
+		c.usageMu.Unlock()
+		return session, nil
+	}
+	c.usageMu.Unlock()
+
+	newSession, err := c.newRequestSession(false)
+	if err != nil {
+		return nil, err
+	}
+
+	c.usageMu.Lock()
+	defer c.usageMu.Unlock()
+	if c.usageSession != nil && c.usageSessionKey == desiredKey {
+		newSession.Close()
+		return c.usageSession, nil
+	}
+	oldSession := c.usageSession
+	c.usageSession = newSession
+	c.usageSessionKey = desiredKey
+	if oldSession != nil {
+		oldSession.Close()
+	}
+	return newSession, nil
+}
+
+func (c *Client) CloseSharedUsageSession() {
+	c.usageMu.Lock()
+	session := c.usageSession
+	c.usageSession = nil
+	c.usageSessionKey = ""
+	c.usageMu.Unlock()
+	if session != nil {
+		session.Close()
+	}
 }
 
 func (c *Client) acquireUpload(ctx context.Context) (func(), error) {
@@ -343,6 +425,160 @@ func closeHTTPClient(client *http.Client) {
 	}
 }
 
+func (s *RequestSession) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	client := s.client
+	s.client = nil
+	s.mu.Unlock()
+	closeHTTPClient(client)
+}
+
+func (s *RequestSession) reset() error {
+	if s == nil || s.parent == nil {
+		return nil
+	}
+	client, err := s.parent.proxy.NewSessionClientForProxyURL(s.proxyURL)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	oldClient := s.client
+	s.client = client
+	s.mu.Unlock()
+	closeHTTPClient(oldClient)
+	return nil
+}
+
+func (s *RequestSession) currentClient() *http.Client {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client
+}
+
+func (s *RequestSession) doRequest(ctx context.Context, method, urlValue, token, contentType, origin, referer string, body io.Reader) (*http.Response, error) {
+	client := s.currentClient()
+	if client == nil {
+		return nil, errors.New("request session is closed")
+	}
+	request, err := http.NewRequestWithContext(ctx, method, urlValue, body)
+	if err != nil {
+		return nil, err
+	}
+	request.Header = s.parent.buildHeaders(s.proxyURL, token, contentType, origin, referer)
+	response, err := client.Do(request)
+	if err != nil {
+		_ = s.reset()
+		return nil, transportError(err)
+	}
+	if isResettableStatus(s.parent.cfg, response.StatusCode) {
+		if resetErr := s.reset(); resetErr != nil {
+			response.Body.Close()
+			return nil, resetErr
+		}
+	}
+	if err := decodeResponseBody(response); err != nil {
+		response.Body.Close()
+		return nil, err
+	}
+	return response, nil
+}
+
+func (s *RequestSession) postJSON(ctx context.Context, path, token string, payload map[string]any, referer string) (map[string]any, error) {
+	data, _ := json.Marshal(payload)
+	resp, err := s.doRequest(ctx, http.MethodPost, s.parent.endpoint(path), token, "application/json", "https://grok.com", referer, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	if len(body) == 0 {
+		return map[string]any{}, nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *RequestSession) FetchQuotaProbe(ctx context.Context, token string) (account.QuotaWindow, error) {
+	body, err := s.postJSON(ctx, "/rest/rate-limits", token, map[string]any{"modelName": "auto"}, "https://grok.com/")
+	if err != nil {
+		return account.QuotaWindow{}, err
+	}
+	window, ok := parseQuotaResponse(body)
+	if !ok {
+		return account.QuotaWindow{}, errors.New("rate limits returned no quota data")
+	}
+	return window, nil
+}
+
+func (s *RequestSession) FetchDetailedQuotas(ctx context.Context, token, pool string, seed map[string]account.QuotaWindow) (map[string]account.QuotaWindow, error) {
+	out := map[string]account.QuotaWindow{}
+	for key, value := range seed {
+		out[key] = value
+	}
+	type quotaResult struct {
+		mode   string
+		window account.QuotaWindow
+		err    error
+	}
+	modes := account.SupportedModes(pool)
+	results := make(chan quotaResult, len(modes))
+	pending := 0
+	for _, mode := range modes {
+		if _, ok := out[mode]; ok {
+			continue
+		}
+		pending++
+		go func(mode string) {
+			body, err := s.postJSON(ctx, "/rest/rate-limits", token, map[string]any{"modelName": mode}, "https://grok.com/")
+			if err != nil {
+				results <- quotaResult{mode: mode, err: err}
+				return
+			}
+			window, ok := parseQuotaResponse(body)
+			if !ok {
+				results <- quotaResult{mode: mode, err: errors.New("rate limits returned no quota data")}
+				return
+			}
+			results <- quotaResult{mode: mode, window: window}
+		}(mode)
+	}
+
+	var lastErr error
+	for index := 0; index < pending; index++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-results:
+			if result.err != nil {
+				if lastErr == nil {
+					lastErr = result.err
+				}
+				continue
+			}
+			out[result.mode] = result.window
+		}
+	}
+	if len(out) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errors.New("rate limits returned no quota data")
+	}
+	return out, lastErr
+}
+
 func (s *ChatSession) ChatStream(ctx context.Context, token string, payload map[string]any) (<-chan string, <-chan error) {
 	out := make(chan string, 32)
 	errCh := make(chan error, 1)
@@ -513,6 +749,102 @@ func (s *ChatSession) FetchDetailedQuotas(ctx context.Context, token, pool strin
 	return out, lastErr
 }
 
+func (s *RequestSession) SetBirthDate(ctx context.Context, token string) error {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "nsfw.timeout", 60)
+	defer cancel()
+	payload := map[string]any{"birthDate": time.Now().AddDate(-25, 0, 0).UTC().Format("2006-01-02T15:04:05.000Z")}
+	data, _ := json.Marshal(payload)
+	resp, err := s.doRequest(ctx, http.MethodPost, s.parent.endpoint("/rest/auth/set-birth-date"), token, "application/json", "https://grok.com", "https://grok.com/", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	return nil
+}
+
+func (s *RequestSession) SetNSFW(ctx context.Context, token string, enabled bool) error {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "nsfw.timeout", 60)
+	defer cancel()
+	value := byte(0)
+	if enabled {
+		value = 1
+	}
+	name := []byte("always_show_nsfw_content")
+	inner := append([]byte{0x0a, byte(len(name))}, name...)
+	protobuf := append([]byte{0x0a, 0x02, 0x10, value, 0x12, byte(len(inner))}, inner...)
+	frame := append([]byte{0x00, 0x00, 0x00, 0x00, byte(len(protobuf))}, protobuf...)
+	resp, err := s.doRequest(ctx, http.MethodPost, s.parent.endpoint("/auth_mgmt.AuthManagement/UpdateUserFeatureControls"), token, "application/grpc-web+proto", "https://grok.com", "https://grok.com/?_s=data", bytes.NewReader(frame))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	return nil
+}
+
+func (s *RequestSession) ListAssets(ctx context.Context, token string) ([]map[string]any, error) {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "asset.list_timeout", 60)
+	defer cancel()
+	release, err := s.parent.acquireList(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	resp, err := s.doRequest(ctx, http.MethodGet, s.parent.endpoint("/rest/assets"), token, "application/json", "https://grok.com", "https://grok.com/", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	items := []map[string]any{}
+	for _, key := range []string{"assets", "items"} {
+		if raw, ok := payload[key].([]any); ok {
+			for _, item := range raw {
+				if mapped, ok := item.(map[string]any); ok {
+					items = append(items, mapped)
+				}
+			}
+		}
+	}
+	return items, nil
+}
+
+func (s *RequestSession) DeleteAsset(ctx context.Context, token, assetID string) error {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "asset.delete_timeout", 60)
+	defer cancel()
+	release, err := s.parent.acquireDelete(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	resp, err := s.doRequest(ctx, http.MethodDelete, s.parent.endpoint("/rest/assets-metadata")+"/"+assetID, token, "application/json", "https://grok.com", "https://grok.com/", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	return nil
+}
+
 func modePayload(mode string) []byte {
 	data, _ := json.Marshal(map[string]any{"modelName": mode})
 	return data
@@ -575,147 +907,37 @@ func (c *Client) FetchAllQuotas(ctx context.Context, token, pool string) (map[st
 }
 
 func (c *Client) SetBirthDate(ctx context.Context, token string) error {
-	ctx, cancel := c.withConfigTimeout(ctx, "nsfw.timeout", 60)
-	defer cancel()
-	payload := map[string]any{"birthDate": time.Now().AddDate(-25, 0, 0).UTC().Format("2006-01-02T15:04:05.000Z")}
-	data, _ := json.Marshal(payload)
-	resp, err := c.do(ctx, http.MethodPost, c.endpoint("/rest/auth/set-birth-date"), token, data, false)
+	session, err := c.newRequestSession(false)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
-	}
-	return nil
+	defer session.Close()
+	return session.SetBirthDate(ctx, token)
 }
 
 func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error {
-	ctx, cancel := c.withConfigTimeout(ctx, "nsfw.timeout", 60)
-	defer cancel()
-	value := byte(0)
-	if enabled {
-		value = 1
-	}
-	name := []byte("always_show_nsfw_content")
-	inner := append([]byte{0x0a, byte(len(name))}, name...)
-	protobuf := append([]byte{0x0a, 0x02, 0x10, value, 0x12, byte(len(inner))}, inner...)
-	frame := append([]byte{0x00, 0x00, 0x00, 0x00, byte(len(protobuf))}, protobuf...)
-	client, proxyKey, err := c.proxy.Client(false)
+	session, err := c.newRequestSession(false)
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/auth_mgmt.AuthManagement/UpdateUserFeatureControls"), bytes.NewReader(frame))
-	if err != nil {
-		return err
-	}
-	request.Header = c.buildHeaders(proxyKey, token, "application/grpc-web+proto", "https://grok.com", "https://grok.com/?_s=data")
-	request.Header.Set("x-grpc-web", "1")
-	request.Header.Set("x-user-agent", "grpc-web-javascript/0.1")
-	resp, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	if isResettableStatus(c.cfg, resp.StatusCode) {
-		c.proxy.Reset(proxyKey)
-	}
-	if err := decodeResponseBody(resp); err != nil {
-		resp.Body.Close()
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
-	}
-	return nil
+	defer session.Close()
+	return session.SetNSFW(ctx, token, enabled)
 }
 
 func (c *Client) ListAssets(ctx context.Context, token string) ([]map[string]any, error) {
-	ctx, cancel := c.withConfigTimeout(ctx, "asset.list_timeout", 60)
-	defer cancel()
-	release, err := c.acquireList(ctx)
+	session, err := c.newRequestSession(true)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
-
-	client, proxyKey, err := c.proxy.Client(true)
-	if err != nil {
-		return nil, err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/rest/assets"), nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header = c.buildHeaders(proxyKey, token, "application/json", "https://grok.com", "https://grok.com/")
-	resp, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	if isResettableStatus(c.cfg, resp.StatusCode) {
-		c.proxy.Reset(proxyKey)
-	}
-	if err := decodeResponseBody(resp); err != nil {
-		resp.Body.Close()
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, &UpstreamError{Status: resp.StatusCode, Body: string(body)}
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	items := []map[string]any{}
-	for _, key := range []string{"assets", "items"} {
-		if raw, ok := payload[key].([]any); ok {
-			for _, item := range raw {
-				if mapped, ok := item.(map[string]any); ok {
-					items = append(items, mapped)
-				}
-			}
-		}
-	}
-	return items, nil
+	defer session.Close()
+	return session.ListAssets(ctx, token)
 }
 
 func (c *Client) DeleteAsset(ctx context.Context, token, assetID string) error {
-	ctx, cancel := c.withConfigTimeout(ctx, "asset.delete_timeout", 60)
-	defer cancel()
-	release, err := c.acquireDelete(ctx)
+	session, err := c.newRequestSession(true)
 	if err != nil {
 		return err
 	}
-	defer release()
-
-	client, proxyKey, err := c.proxy.Client(true)
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.endpoint("/rest/assets-metadata")+"/"+assetID, nil)
-	if err != nil {
-		return err
-	}
-	request.Header = c.buildHeaders(proxyKey, token, "application/json", "https://grok.com", "https://grok.com/")
-	resp, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	if isResettableStatus(c.cfg, resp.StatusCode) {
-		c.proxy.Reset(proxyKey)
-	}
-	if err := decodeResponseBody(resp); err != nil {
-		resp.Body.Close()
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
-	}
-	return nil
+	defer session.Close()
+	return session.DeleteAsset(ctx, token, assetID)
 }

@@ -70,3 +70,69 @@ func TestChatSessionResetReplacesClient(t *testing.T) {
 		t.Fatal("expected reset to replace the underlying client")
 	}
 }
+
+func TestSharedUsageSessionReusesClientUntilClosed(t *testing.T) {
+	cfg := testutil.NewConfig(map[string]any{
+		"proxy": map[string]any{
+			"egress": map[string]any{
+				"mode": "direct",
+			},
+		},
+	})
+	runtime := proxy.NewRuntime(cfg)
+	client := NewClient(cfg, runtime)
+
+	first, err := client.SharedUsageSession()
+	if err != nil {
+		t.Fatalf("first shared usage session: %v", err)
+	}
+	second, err := client.SharedUsageSession()
+	if err != nil {
+		t.Fatalf("second shared usage session: %v", err)
+	}
+	if first != second {
+		t.Fatal("expected shared usage session to be reused")
+	}
+
+	client.CloseSharedUsageSession()
+
+	third, err := client.SharedUsageSession()
+	if err != nil {
+		t.Fatalf("third shared usage session: %v", err)
+	}
+	defer client.CloseSharedUsageSession()
+	if third == first {
+		t.Fatal("expected new shared usage session after close")
+	}
+}
+
+func TestNewRequestSessionUsesFreshClient(t *testing.T) {
+	cfg := testutil.NewConfig(map[string]any{
+		"proxy": map[string]any{
+			"egress": map[string]any{
+				"mode": "direct",
+			},
+		},
+	})
+	runtime := proxy.NewRuntime(cfg)
+	client := NewClient(cfg, runtime)
+
+	first, err := client.NewRequestSession(true)
+	if err != nil {
+		t.Fatalf("new first request session: %v", err)
+	}
+	defer first.Close()
+
+	second, err := client.NewRequestSession(true)
+	if err != nil {
+		t.Fatalf("new second request session: %v", err)
+	}
+	defer second.Close()
+
+	if first.currentClient() == nil || second.currentClient() == nil {
+		t.Fatal("expected request sessions to have active clients")
+	}
+	if first.currentClient() == second.currentClient() {
+		t.Fatal("expected independent clients per request session")
+	}
+}

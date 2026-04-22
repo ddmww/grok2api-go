@@ -389,16 +389,16 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	summary.Quota["heavy"] = totals.Heavy
 
 	type groupedCount struct {
-		Key   string
-		Count int64
+		Group string `gorm:"column:group_value"`
+		Count int64  `gorm:"column:count"`
 	}
 	var statusRows []groupedCount
-	if err := newScope(queryWithoutStatus(query)).Select("status AS key, COUNT(*) AS count").Group("status").Scan(&statusRows).Error; err != nil {
+	if err := newScope(queryWithoutStatus(query)).Select("status AS group_value, COUNT(*) AS count").Group("status").Scan(&statusRows).Error; err != nil {
 		return Summary{}, err
 	}
 	for _, row := range statusRows {
 		summary.Status["all"] += row.Count
-		switch row.Key {
+		switch row.Group {
 		case string(StatusActive):
 			summary.Status["active"] = row.Count
 		case string(StatusCooling):
@@ -411,13 +411,13 @@ func (r *gormRepository) SummarizeAccounts(ctx context.Context, query ListQuery)
 	}
 
 	var poolRows []groupedCount
-	if err := newScope(queryWithoutPool(query)).Select("pool AS key, COUNT(*) AS count").Group("pool").Scan(&poolRows).Error; err != nil {
+	if err := newScope(queryWithoutPool(query)).Select("pool AS group_value, COUNT(*) AS count").Group("pool").Scan(&poolRows).Error; err != nil {
 		return Summary{}, err
 	}
 	for _, row := range poolRows {
 		summary.Pool["all"] += row.Count
-		if _, ok := summary.Pool[row.Key]; ok {
-			summary.Pool[row.Key] = row.Count
+		if _, ok := summary.Pool[row.Group]; ok {
+			summary.Pool[row.Group] = row.Count
 		}
 	}
 
