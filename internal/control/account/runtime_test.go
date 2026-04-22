@@ -93,3 +93,79 @@ func TestRuntimeReserveAndFeedback(t *testing.T) {
 		t.Fatalf("expected token-b after cooldown, got %q", nextLease.Token)
 	}
 }
+
+func TestRuntimeReservePrefersWeightedQuotaOverLRU(t *testing.T) {
+	repo := &stubRepository{
+		snapshot: []Record{
+			{
+				Token:          "token-low",
+				Pool:           "basic",
+				Status:         StatusActive,
+				Quota:          DefaultQuotaSet("basic"),
+				LastUseAt:      1,
+				UsageFailCount: 0,
+			},
+			{
+				Token:          "token-high",
+				Pool:           "basic",
+				Status:         StatusActive,
+				Quota:          DefaultQuotaSet("basic"),
+				LastUseAt:      NowMS(),
+				UsageFailCount: 0,
+			},
+		},
+	}
+	repo.snapshot[0].Quota.Fast.Remaining = 1
+	repo.snapshot[1].Quota.Fast.Remaining = 12
+
+	runtime := NewRuntime(repo)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+
+	spec, ok := model.Get("grok-4.20-fast")
+	if !ok {
+		t.Fatal("model not found")
+	}
+	lease, err := runtime.Reserve(spec)
+	if err != nil {
+		t.Fatalf("reserve failed: %v", err)
+	}
+	if lease.Token != "token-high" {
+		t.Fatalf("expected higher-quota token, got %q", lease.Token)
+	}
+}
+
+func TestRuntimeReserveResetsExpiredBasicWindowInline(t *testing.T) {
+	repo := &stubRepository{
+		snapshot: []Record{
+			{
+				Token:  "token-basic",
+				Pool:   "basic",
+				Status: StatusActive,
+				Quota:  DefaultQuotaSet("basic"),
+			},
+		},
+	}
+	repo.snapshot[0].Quota.Auto.Remaining = 0
+	repo.snapshot[0].Quota.Auto.Total = 20
+	repo.snapshot[0].Quota.Auto.WindowSeconds = 72000
+	repo.snapshot[0].Quota.Auto.ResetAt = NowMS() - 1000
+
+	runtime := NewRuntime(repo)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+
+	spec, ok := model.Get("grok-4.20-auto")
+	if !ok {
+		t.Fatal("model not found")
+	}
+	lease, err := runtime.Reserve(spec)
+	if err != nil {
+		t.Fatalf("reserve failed after inline reset: %v", err)
+	}
+	if lease.Token != "token-basic" {
+		t.Fatalf("expected token-basic, got %q", lease.Token)
+	}
+}

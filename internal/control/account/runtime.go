@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"sync"
 
@@ -90,35 +91,102 @@ func (r *Runtime) ReserveWithExclude(spec model.Spec, excluded map[string]struct
 	defer r.mu.Unlock()
 	now := NowMS()
 	for _, pool := range spec.PoolCandidates() {
-		var candidates []*runtimeItem
+		var (
+			chosen    *runtimeItem
+			bestScore       = math.Inf(-1)
+			bestUseAt int64 = math.MaxInt64
+			bestToken string
+		)
 		for _, item := range r.items {
-			record := item.record
+			record := &item.record
 			if _, skip := excluded[record.Token]; skip {
 				continue
 			}
 			if record.Pool != pool || record.IsDeleted() || record.EffectiveStatus(now) != StatusActive {
 				continue
 			}
-			window := record.Quota.Window(spec.Mode)
+			window := maybeResetQuotaWindow(record, spec.Mode, now)
 			if window == nil || window.Remaining <= 0 {
 				continue
 			}
-			candidates = append(candidates, item)
+			score := candidateScore(*record, item.inflight, spec.Mode, now)
+			lastUseAt := record.LastUseAt
+			if score > bestScore || (score == bestScore && (lastUseAt < bestUseAt || (lastUseAt == bestUseAt && record.Token < bestToken))) {
+				chosen = item
+				bestScore = score
+				bestUseAt = lastUseAt
+				bestToken = record.Token
+			}
 		}
-		if len(candidates) == 0 {
+		if chosen == nil {
 			continue
 		}
-		sort.SliceStable(candidates, func(i, j int) bool {
-			if candidates[i].inflight == candidates[j].inflight {
-				return candidates[i].record.LastUseAt < candidates[j].record.LastUseAt
-			}
-			return candidates[i].inflight < candidates[j].inflight
-		})
-		chosen := candidates[0]
 		chosen.inflight++
 		return &Lease{Token: chosen.record.Token, Pool: chosen.record.Pool, Mode: spec.Mode}, nil
 	}
 	return nil, errors.New("no available accounts for this model tier")
+}
+
+func maybeResetQuotaWindow(record *Record, mode string, now int64) *QuotaWindow {
+	if record == nil || NormalizePool(record.Pool) != "basic" {
+		return quotaWindowPtr(&record.Quota, mode)
+	}
+	window := quotaWindowPtr(&record.Quota, mode)
+	if window == nil || window.ResetAt == 0 || now < window.ResetAt {
+		return window
+	}
+	if window.Total <= 0 || window.WindowSeconds <= 0 {
+		return window
+	}
+	window.Remaining = window.Total
+	window.ResetAt = now + int64(window.WindowSeconds)*1000
+	if window.Source == QuotaSourceLocal || window.Source == QuotaSourceDefault {
+		window.Source = QuotaSourceLocal
+	}
+	return window
+}
+
+func quotaWindowPtr(quota *QuotaSet, mode string) *QuotaWindow {
+	if quota == nil {
+		return nil
+	}
+	switch mode {
+	case "fast":
+		return &quota.Fast
+	case "expert":
+		return &quota.Expert
+	case "heavy":
+		return quota.Heavy
+	case "grok-420-computer-use-sa", "grok_4_3":
+		return quota.Grok4_3
+	default:
+		return &quota.Auto
+	}
+}
+
+func candidateScore(record Record, inflight int, mode string, now int64) float64 {
+	window := record.Quota.Window(mode)
+	if window == nil || window.Remaining <= 0 {
+		return math.Inf(-1)
+	}
+	score := float64(window.Remaining * 25)
+	score -= float64(inflight * 20)
+	failCount := record.UsageFailCount
+	if failCount > 10 {
+		failCount = 10
+	}
+	score -= float64(failCount * 4)
+	if record.LastUseAt > 0 {
+		const recentWindowMS = int64(15_000)
+		age := now - record.LastUseAt
+		if age < 0 {
+			age = 0
+		}
+		if age < recentWindowMS {
+			score -= (1 - float64(age)/float64(recentWindowMS)) * 15
+		}
+	}
+	return score
 }
 
 func (r *Runtime) Release(token string) {

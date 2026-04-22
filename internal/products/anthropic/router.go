@@ -263,7 +263,7 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 	defer session.Close()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		lease, err := state.Runtime.ReserveWithExclude(spec, excluded)
+		lease, err := reserveAnthropicLease(state, spec, excluded)
 		if err != nil {
 			if lastRetryErr != nil {
 				return runResult{}, lastRetryErr
@@ -339,6 +339,38 @@ func runMessages(ctx context.Context, state *app.State, spec model.Spec, request
 		return result, nil
 	}
 	return runResult{}, fmt.Errorf("no available accounts for this model tier")
+}
+
+func reserveAnthropicLease(state *app.State, spec model.Spec, excluded map[string]struct{}) (*account.Lease, error) {
+	tryReserve := func() (*account.Lease, error) {
+		autoFallback := true
+		if state != nil && state.Config != nil {
+			autoFallback = state.Config.GetBool("features.auto_chat_mode_fallback", true)
+		}
+		var lastErr error
+		for _, mode := range model.ModeCandidates(spec, autoFallback) {
+			lease, err := state.Runtime.ReserveWithExclude(spec.WithMode(mode), excluded)
+			if err == nil {
+				return lease, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+
+	lease, err := tryReserve()
+	if err == nil {
+		return lease, nil
+	}
+	if state == nil || state.Refresh == nil {
+		return nil, err
+	}
+	refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, refreshErr := state.Refresh.RefreshOnDemand(refreshCtx); refreshErr != nil {
+		return nil, err
+	}
+	return tryReserve()
 }
 
 func anthropicUsage(result runResult) map[string]any {

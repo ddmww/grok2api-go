@@ -111,6 +111,48 @@ func TestMessagesRoute(t *testing.T) {
 		}
 	})
 
+	t.Run("auto mode falls back to fast quota", func(t *testing.T) {
+		status := account.StatusActive
+		reason := ""
+		lastUseAt := int64(0)
+		if _, err := repo.PatchAccounts(context.Background(), []account.Patch{{
+			Token:       "token-1",
+			Status:      &status,
+			StateReason: &reason,
+			LastUseAt:   &lastUseAt,
+			Quota: map[string]account.QuotaWindow{
+				"auto": account.QuotaWindow{Remaining: 0, Total: 20, WindowSeconds: 72000},
+				"fast": account.DefaultQuotaSet("basic").Fast,
+			},
+			ExtMerge: map[string]any{"cooldown_until": int64(0)},
+		}}); err != nil {
+			t.Fatalf("patch fallback quotas: %v", err)
+		}
+		if err := runtime.Sync(context.Background()); err != nil {
+			t.Fatalf("sync runtime after fallback quota patch: %v", err)
+		}
+
+		body := map[string]any{
+			"model":  "grok-4.20-auto",
+			"stream": false,
+			"messages": []map[string]any{
+				{"role": "user", "content": "hello"},
+			},
+		}
+		payload, _ := json.Marshal(body)
+		req := testutil.NewCloseNotifyRecorder()
+		request, _ := http.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(payload))
+		request.Header.Set("Authorization", "Bearer test-api-key")
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(req, request)
+		if req.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", req.Code, req.Body.String())
+		}
+		if !strings.Contains(req.Body.String(), `"type":"message"`) {
+			t.Fatalf("unexpected body: %s", req.Body.String())
+		}
+	})
+
 	t.Run("non-stream upstream blocker", func(t *testing.T) {
 		if err := cfg.Update(context.Background(), map[string]any{
 			"upstream_blocker": map[string]any{

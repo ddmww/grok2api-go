@@ -97,6 +97,8 @@ func TestOpenAIRoutes(t *testing.T) {
 		reason := ""
 		tokenOneLastUse := int64(0)
 		tokenTwoLastUse := int64(1)
+		clearFailures := true
+		basicQuota := account.DefaultQuotaSet("basic")
 		patches := []account.Patch{
 			{
 				Token:       "token-1",
@@ -104,9 +106,12 @@ func TestOpenAIRoutes(t *testing.T) {
 				StateReason: &reason,
 				LastUseAt:   &tokenOneLastUse,
 				Quota: map[string]account.QuotaWindow{
-					"fast": account.DefaultQuotaSet("basic").Fast,
+					"auto":   basicQuota.Auto,
+					"fast":   basicQuota.Fast,
+					"expert": basicQuota.Expert,
 				},
-				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+				ClearFailures: clearFailures,
+				ExtMerge:      map[string]any{"cooldown_until": int64(0)},
 			},
 			{
 				Token:       "token-2",
@@ -114,9 +119,12 @@ func TestOpenAIRoutes(t *testing.T) {
 				StateReason: &reason,
 				LastUseAt:   &tokenTwoLastUse,
 				Quota: map[string]account.QuotaWindow{
-					"fast": account.DefaultQuotaSet("basic").Fast,
+					"auto":   basicQuota.Auto,
+					"fast":   basicQuota.Fast,
+					"expert": basicQuota.Expert,
 				},
-				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+				ClearFailures: clearFailures,
+				ExtMerge:      map[string]any{"cooldown_until": int64(0)},
 			},
 		}
 		if _, err := repo.PatchAccounts(context.Background(), patches); err != nil {
@@ -193,6 +201,61 @@ func TestOpenAIRoutes(t *testing.T) {
 			if !strings.Contains(resp.Body.String(), "Hello from fake grok") {
 				t.Fatalf("request %d chat body mismatch: %s", index+1, resp.Body.String())
 			}
+		}
+	})
+
+	t.Run("chat completions auto mode falls back to fast quota", func(t *testing.T) {
+		status := account.StatusActive
+		reason := ""
+		tokenOneLastUse := int64(0)
+		tokenTwoLastUse := int64(1)
+		if _, err := repo.PatchAccounts(context.Background(), []account.Patch{
+			{
+				Token:       "token-1",
+				Status:      &status,
+				StateReason: &reason,
+				LastUseAt:   &tokenOneLastUse,
+				Quota: map[string]account.QuotaWindow{
+					"auto": account.QuotaWindow{Remaining: 0, Total: 20, WindowSeconds: 72000},
+					"fast": account.DefaultQuotaSet("basic").Fast,
+				},
+				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+			},
+			{
+				Token:       "token-2",
+				Status:      &status,
+				StateReason: &reason,
+				LastUseAt:   &tokenTwoLastUse,
+				Quota: map[string]account.QuotaWindow{
+					"auto": account.QuotaWindow{Remaining: 0, Total: 20, WindowSeconds: 72000},
+					"fast": account.QuotaWindow{Remaining: 0, Total: 60, WindowSeconds: 72000},
+				},
+				ExtMerge: map[string]any{"cooldown_until": int64(0)},
+			},
+		}); err != nil {
+			t.Fatalf("patch fallback quotas: %v", err)
+		}
+		if err := runtime.Sync(context.Background()); err != nil {
+			t.Fatalf("sync runtime after fallback quota patch: %v", err)
+		}
+
+		body := map[string]any{
+			"model": "grok-4.20-auto",
+			"messages": []map[string]any{
+				{"role": "user", "content": "hello"},
+			},
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer test-api-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp := testutil.NewCloseNotifyRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), "Hello from fake grok") {
+			t.Fatalf("fallback body mismatch: %s", resp.Body.String())
 		}
 	})
 
@@ -617,6 +680,7 @@ func TestOpenAIRoutes(t *testing.T) {
 	})
 
 	t.Run("chat media routing", func(t *testing.T) {
+		resetImageTestTokens(t)
 		fake.AppChatImageMode = "preview"
 		fake.WebsocketImageMode = "partial"
 		body := map[string]any{

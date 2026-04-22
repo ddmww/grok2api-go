@@ -25,6 +25,12 @@ func (s Spec) IsImage() bool     { return s.Capability&CapabilityImage != 0 }
 func (s Spec) IsImageEdit() bool { return s.Capability&CapabilityImageEdit != 0 }
 func (s Spec) IsVideo() bool     { return s.Capability&CapabilityVideo != 0 }
 
+func (s Spec) WithMode(mode string) Spec {
+	next := s
+	next.Mode = mode
+	return next
+}
+
 func (s Spec) PoolCandidates() []string {
 	if s.PreferBest && s.Pool != "heavy" {
 		return []string{"heavy", "super", "basic"}
@@ -37,6 +43,13 @@ func (s Spec) PoolCandidates() []string {
 	default:
 		return []string{"basic", "super", "heavy"}
 	}
+}
+
+func ModeCandidates(spec Spec, autoFallback bool) []string {
+	if spec.IsChat() && spec.Mode == "auto" && autoFallback {
+		return []string{"auto", "fast", "expert"}
+	}
+	return []string{spec.Mode}
 }
 
 var models = []Spec{

@@ -550,7 +550,35 @@ func shouldRetry(err error, retryCodes map[int]struct{}, attempt, maxRetries int
 }
 
 func reserveLease(state *app.State, spec model.Spec, excluded map[string]struct{}) (*account.Lease, error) {
-	return state.Runtime.ReserveWithExclude(spec, excluded)
+	tryReserve := func() (*account.Lease, error) {
+		autoFallback := true
+		if state != nil && state.Config != nil {
+			autoFallback = state.Config.GetBool("features.auto_chat_mode_fallback", true)
+		}
+		var lastErr error
+		for _, mode := range model.ModeCandidates(spec, autoFallback) {
+			lease, err := state.Runtime.ReserveWithExclude(spec.WithMode(mode), excluded)
+			if err == nil {
+				return lease, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+
+	lease, err := tryReserve()
+	if err == nil {
+		return lease, nil
+	}
+	if state == nil || state.Refresh == nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, refreshErr := state.Refresh.RefreshOnDemand(ctx); refreshErr != nil {
+		return nil, err
+	}
+	return tryReserve()
 }
 
 func feedbackForError(err error) account.Feedback {
