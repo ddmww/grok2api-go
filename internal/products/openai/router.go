@@ -708,7 +708,6 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			if kind != "data" {
 				continue
 			}
-			stop := false
 			for _, event := range adapter.Feed(data) {
 				switch event.Kind {
 				case "thinking":
@@ -719,12 +718,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 					if event.AnnotationData != nil {
 						result.annotations = append(result.annotations, event.AnnotationData)
 					}
-				case "soft_stop":
-					stop = true
 				}
-			}
-			if stop {
-				break
 			}
 		}
 		if trailing := adapter.FinalizeThinking(); trailing != "" {
@@ -807,6 +801,23 @@ func writeSSEDone(c *gin.Context) bool {
 		flusher.Flush()
 	}
 	return true
+}
+
+func finalTextCompletionDelta(result *streamResult, adapter *xai.StreamAdapter) string {
+	finalText := adapter.FinalText()
+	if finalText == "" {
+		return ""
+	}
+	if result.content == "" {
+		result.content = finalText
+		return finalText
+	}
+	if strings.HasPrefix(finalText, result.content) && len(finalText) > len(result.content) {
+		delta := finalText[len(result.content):]
+		result.content = finalText
+		return delta
+	}
+	return ""
 }
 
 func classifyLine(line string) (string, string) {
@@ -986,7 +997,6 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			if kind != "data" {
 				continue
 			}
-			stop := false
 			for _, event := range adapter.Feed(data) {
 				switch event.Kind {
 				case "thinking":
@@ -1021,12 +1031,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 					if event.AnnotationData != nil {
 						result.annotations = append(result.annotations, event.AnnotationData)
 					}
-				case "soft_stop":
-					stop = true
 				}
-			}
-			if stop {
-				break
 			}
 		}
 		if trailing := adapter.FinalizeThinking(); trailing != "" {
@@ -1045,7 +1050,23 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			return
 		}
 
+		if delta := finalTextCompletionDelta(&result, adapter); delta != "" && len(toolNames) == 0 {
+			outputStarted = true
+			if !writeSSEData(c, map[string]any{
+				"id":      id,
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"model":   spec.Name,
+				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": delta}}},
+			}) {
+				return
+			}
+		}
+
 		if len(toolNames) > 0 {
+			if finalText := adapter.FinalText(); result.content == "" && finalText != "" {
+				result.content = finalText
+			}
 			result.toolCalls = parseToolCalls(result.content, toolNames)
 			if len(result.toolCalls) > 0 {
 				for index, call := range result.toolCalls {
@@ -1190,7 +1211,6 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 			if kind != "data" {
 				continue
 			}
-			stop := false
 			for _, event := range adapter.Feed(data) {
 				switch event.Kind {
 				case "thinking":
@@ -1215,12 +1235,7 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 					if event.AnnotationData != nil {
 						result.annotations = append(result.annotations, event.AnnotationData)
 					}
-				case "soft_stop":
-					stop = true
 				}
-			}
-			if stop {
-				break
 			}
 		}
 
@@ -1237,7 +1252,25 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		}
 		result.searchSources = adapter.SearchSourcesList()
 
+		if delta := finalTextCompletionDelta(&result, adapter); delta != "" && len(toolNames) == 0 {
+			if !sendCreated() {
+				return
+			}
+			if !writeSSEEvent(c, "response.output_text.delta", map[string]any{
+				"type":          "response.output_text.delta",
+				"item_id":       itemID,
+				"output_index":  0,
+				"content_index": 0,
+				"delta":         delta,
+			}) {
+				return
+			}
+		}
+
 		if len(toolNames) > 0 {
+			if finalText := adapter.FinalText(); result.content == "" && finalText != "" {
+				result.content = finalText
+			}
 			result.toolCalls = parseToolCalls(result.content, toolNames)
 			if !writeSSEEvent(c, "response.created", map[string]any{
 				"type":     "response.created",
