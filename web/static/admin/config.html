@@ -643,6 +643,8 @@ const SCHEMA_DEF = [
         section: 'chat',
         fields: [
           { key: 'timeout', section: 'chat', label: '对话请求超时（秒）', labelKey: 'config.schema.fields.chatTimeout.label', type: 'number', desc: '对话与图像编辑请求的 HTTP 连接超时时间。', descKey: 'config.schema.fields.chatTimeout.desc' },
+          { key: 'stream_retry_enabled', section: 'chat', label: '流式早期截断重试', labelKey: 'config.schema.fields.streamRetryEnabled.label', type: 'bool', desc: '开启后，下游流式请求会先缓冲少量内容；若上游在缓冲窗口内异常结束，则自动重试且不向下游泄露失败片段。', descKey: 'config.schema.fields.streamRetryEnabled.desc' },
+          { key: 'stream_retry_buffer_runes', section: 'chat', label: '流式重试缓冲阈值', labelKey: 'config.schema.fields.streamRetryBufferRunes.label', type: 'number', desc: '按 Unicode 字符计数。达到该阈值后开始实时输出给下游；设为 0 可关闭前置缓冲。默认 320。', descKey: 'config.schema.fields.streamRetryBufferRunes.desc' },
           { key: 'timeout', section: 'image', label: '图像请求超时（秒）', labelKey: 'config.schema.fields.imageTimeout.label', type: 'number', desc: '图像生成 WebSocket 请求的总超时时间。', descKey: 'config.schema.fields.imageTimeout.desc' },
           { key: 'stream_timeout', section: 'image', label: '图像流式空闲超时（秒）', type: 'number', desc: '图像生成 WebSocket 在流式接收阶段允许的最长连续空闲等待时长。' },
           { key: 'timeout', section: 'video', label: '视频请求超时（秒）', labelKey: 'config.schema.fields.videoTimeout.label', type: 'number', desc: '视频生成请求的统一超时时间。', descKey: 'config.schema.fields.videoTimeout.desc' },

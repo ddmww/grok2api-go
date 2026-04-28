@@ -108,7 +108,7 @@ reset_session_status_codes = [403]
 # [App 层] 换账号重试最大次数（0 = 不重试）
 max_retries = 1
 # [App 层] 触发换账号重试的 HTTP 状态码，英文逗号分隔
-on_codes = "429,401,503"
+on_codes = "429,401,502,503"
 
 
 [account.refresh]
@@ -122,6 +122,10 @@ on_demand_min_interval_sec = 300
 # ==================== 对话配置 ====================
 [chat]
 timeout = 60
+# 下游流式响应早期异常结束时，是否在尚未输出给下游前自动重试。
+stream_retry_enabled = true
+# 下游流式响应的前置缓冲窗口。窗口内上游异常结束时可无感重试。
+stream_retry_buffer_runes = 320
 
 
 # ==================== 图像配置 ====================

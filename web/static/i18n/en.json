@@ -408,6 +408,14 @@
           "label": "Chat Request Timeout (s)",
           "desc": "HTTP connection timeout for chat and image-edit requests."
         },
+        "streamRetryEnabled": {
+          "label": "Early Stream Truncation Retry",
+          "desc": "When enabled, streamed chat buffers a small prefix. If upstream ends abnormally inside that buffer, the request is retried without leaking the failed prefix downstream."
+        },
+        "streamRetryBufferRunes": {
+          "label": "Stream Retry Buffer Threshold",
+          "desc": "Counted in Unicode characters. Output starts after this threshold; set 0 to disable prefix buffering. Default 320."
+        },
         "imageTimeout": {
           "label": "Image Request Timeout (s)",
           "desc": "Overall timeout for image generation WebSocket requests."

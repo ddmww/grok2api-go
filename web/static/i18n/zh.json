@@ -408,6 +408,14 @@
           "label": "对话请求超时（秒）",
           "desc": "对话与图像编辑请求的 HTTP 连接超时时间。"
         },
+        "streamRetryEnabled": {
+          "label": "流式早期截断重试",
+          "desc": "开启后，下游流式请求会先缓冲少量内容；若上游在缓冲窗口内异常结束，则自动重试且不向下游泄露失败片段。"
+        },
+        "streamRetryBufferRunes": {
+          "label": "流式重试缓冲阈值",
+          "desc": "按 Unicode 字符计数。达到该阈值后开始实时输出给下游；设为 0 可关闭前置缓冲。默认 320。"
+        },
         "imageTimeout": {
           "label": "图像请求超时（秒）",
           "desc": "图像生成 WebSocket 请求的总超时时间。"

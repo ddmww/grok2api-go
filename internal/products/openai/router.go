@@ -50,6 +50,7 @@ type streamResult struct {
 	annotations   []map[string]any
 	searchSources []map[string]any
 	usage         map[string]any
+	completed     bool
 }
 
 func Mount(router *gin.Engine, state *app.State) {
@@ -690,6 +691,8 @@ func consumeChatStream(lines <-chan string, adapter *xai.StreamAdapter, onEvent 
 				if event.AnnotationData != nil {
 					result.annotations = append(result.annotations, event.AnnotationData)
 				}
+			case "soft_stop":
+				result.completed = true
 			}
 			if onEvent != nil && !onEvent(event) {
 				return result, false
@@ -738,6 +741,16 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		result, _ := consumeChatStream(lines, adapter, nil)
 
 		if err := <-errCh; err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if shouldRetry(err, retryCodes, attempt, maxRetries) {
+				lastRetryErr = err
+				excluded[lease.Token] = struct{}{}
+				continue
+			}
+			return streamResult{}, err
+		}
+		if !result.completed {
+			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				lastRetryErr = err
@@ -837,6 +850,29 @@ func finalTextCompletionDelta(result *streamResult, adapter *xai.StreamAdapter) 
 		return delta
 	}
 	return ""
+}
+
+func splitStreamText(text string, maxRunes int) []string {
+	if text == "" {
+		return nil
+	}
+	if maxRunes <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	chunks := make([]string, 0, (len(runes)+maxRunes-1)/maxRunes)
+	for start := 0; start < len(runes); start += maxRunes {
+		end := start + maxRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[start:end]))
+	}
+	return chunks
+}
+
+func runeCount(text string) int {
+	return len([]rune(text))
 }
 
 func classifyLine(line string) (string, string) {
@@ -1009,30 +1045,62 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
 		adapter := xai.NewStreamAdapter(state.Config)
 		outputStarted := false
+		streamRetryEnabled := state.Config.GetBool("chat.stream_retry_enabled", true)
+		bufferedEvents := []map[string]any{}
+		bufferedRunes := 0
+		streamRetryBufferRunes := state.Config.GetInt("chat.stream_retry_buffer_runes", 320)
+		if !streamRetryEnabled || streamRetryBufferRunes < 0 {
+			streamRetryBufferRunes = 0
+		}
+
+		flushBuffered := func() bool {
+			if len(bufferedEvents) == 0 {
+				return true
+			}
+			for _, payload := range bufferedEvents {
+				if !writeSSEData(c, payload) {
+					return false
+				}
+			}
+			bufferedEvents = nil
+			bufferedRunes = 0
+			outputStarted = true
+			return true
+		}
+
+		queueOrWrite := func(payload map[string]any, content string) bool {
+			if outputStarted {
+				return writeSSEData(c, payload)
+			}
+			bufferedEvents = append(bufferedEvents, payload)
+			bufferedRunes += runeCount(content)
+			if bufferedRunes >= streamRetryBufferRunes {
+				return flushBuffered()
+			}
+			return true
+		}
 
 		result, ok := consumeChatStream(lines, adapter, func(event xai.FrameEvent) bool {
 			switch event.Kind {
 			case "thinking":
 				if len(toolNames) == 0 && thinkingEnabled {
-					outputStarted = true
-					return writeSSEData(c, map[string]any{
+					return queueOrWrite(map[string]any{
 						"id":      id,
 						"object":  "chat.completion.chunk",
 						"created": time.Now().Unix(),
 						"model":   spec.Name,
 						"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": event.Content}}},
-					})
+					}, event.Content)
 				}
 			case "text":
 				if len(toolNames) == 0 {
-					outputStarted = true
-					return writeSSEData(c, map[string]any{
+					return queueOrWrite(map[string]any{
 						"id":      id,
 						"object":  "chat.completion.chunk",
 						"created": time.Now().Unix(),
 						"model":   spec.Name,
 						"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": event.Content}}},
-					})
+					}, event.Content)
 				}
 			}
 			return true
@@ -1043,27 +1111,48 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 
 		if err := <-errCh; err != nil {
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
-			if !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
+			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
 			if !outputStarted {
 				writeOpenAIError(c, err)
+				return
 			}
+			_ = writeSSEData(c, map[string]any{"error": map[string]any{"message": err.Error(), "type": "server_error", "code": "upstream_stream_error"}})
+			_ = writeSSEDone(c)
+			return
+		}
+		if !result.completed {
+			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
+				excluded[lease.Token] = struct{}{}
+				continue
+			}
+			if !outputStarted {
+				writeOpenAIError(c, err)
+				return
+			}
+			_ = writeSSEData(c, map[string]any{"error": map[string]any{"message": "上游流式响应未正常结束", "type": "server_error", "code": "upstream_stream_incomplete"}})
+			_ = writeSSEDone(c)
 			return
 		}
 
 		if delta := finalTextCompletionDelta(&result, adapter); delta != "" && len(toolNames) == 0 {
-			outputStarted = true
-			if !writeSSEData(c, map[string]any{
+			if !queueOrWrite(map[string]any{
 				"id":      id,
 				"object":  "chat.completion.chunk",
 				"created": time.Now().Unix(),
 				"model":   spec.Name,
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": delta}}},
-			}) {
+			}, delta) {
 				return
 			}
+		}
+
+		if !flushBuffered() {
+			return
 		}
 
 		if len(toolNames) > 0 {
@@ -1163,162 +1252,41 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	id := responseID("resp")
-	message, toolNames := prepareMessage(messages, tools, toolChoice)
-	retryCodes := retryCodesFromConfig(state)
-	maxRetries := maxRetriesFromConfig(state)
-	excluded := map[string]struct{}{}
-	session, err := state.XAI.NewChatSession()
+
+	result, err := runChat(c.Request.Context(), state, spec, messages, tools, toolChoice)
 	if err != nil {
 		writeOpenAIError(c, err)
 		return
 	}
-	defer session.Close()
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		lease, err := reserveLease(state, spec, excluded)
-		if err != nil {
-			writeOpenAIError(c, err)
-			return
-		}
 
-		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
-		adapter := xai.NewStreamAdapter(state.Config)
-		itemID := responseID("msg")
-		createdSent := false
+	itemID := responseID("msg")
+	if !writeSSEEvent(c, "response.created", map[string]any{
+		"type":     "response.created",
+		"response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil),
+	}) {
+		return
+	}
 
-		sendCreated := func() bool {
-			if createdSent {
-				return true
-			}
-			createdSent = true
-			return writeSSEEvent(c, "response.created", map[string]any{
-				"type":     "response.created",
-				"response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil),
-			}) && writeSSEEvent(c, "response.output_item.added", map[string]any{
-				"type":         "response.output_item.added",
-				"output_index": 0,
-				"item": map[string]any{
-					"id":      itemID,
-					"type":    "message",
-					"role":    "assistant",
-					"content": []map[string]any{{"type": "output_text", "text": ""}},
-				},
-			})
-		}
-
-		result, ok := consumeChatStream(lines, adapter, func(event xai.FrameEvent) bool {
-			switch event.Kind {
-			case "text":
-				if len(toolNames) == 0 {
-					if !sendCreated() {
-						return false
-					}
-					return writeSSEEvent(c, "response.output_text.delta", map[string]any{
-						"type":          "response.output_text.delta",
-						"item_id":       itemID,
-						"output_index":  0,
-						"content_index": 0,
-						"delta":         event.Content,
-					})
-				}
-			}
-			return true
-		})
-		if !ok {
-			return
-		}
-
-		if err := <-errCh; err != nil {
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
-			if !createdSent && shouldRetry(err, retryCodes, attempt, maxRetries) {
-				excluded[lease.Token] = struct{}{}
-				continue
-			}
-			if !createdSent {
-				writeOpenAIError(c, err)
-			}
-			return
-		}
-		result.searchSources = adapter.SearchSourcesList()
-
-		if delta := finalTextCompletionDelta(&result, adapter); delta != "" && len(toolNames) == 0 {
-			if !sendCreated() {
+	if len(result.toolCalls) > 0 {
+		output := []map[string]any{}
+		for index, call := range result.toolCalls {
+			fcItemID := responseID("fc")
+			item := map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "status": "completed"}
+			output = append(output, item)
+			if !writeSSEEvent(c, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": index, "item": map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": "", "status": "in_progress"}}) {
 				return
 			}
-			if !writeSSEEvent(c, "response.output_text.delta", map[string]any{
-				"type":          "response.output_text.delta",
-				"item_id":       itemID,
-				"output_index":  0,
-				"content_index": 0,
-				"delta":         delta,
-			}) {
+			if !writeSSEEvent(c, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": fcItemID, "output_index": index, "delta": call.Arguments}) {
+				return
+			}
+			if !writeSSEEvent(c, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "item_id": fcItemID, "output_index": index, "arguments": call.Arguments}) {
+				return
+			}
+			if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": index, "item": item}) {
 				return
 			}
 		}
-
-		if len(toolNames) > 0 {
-			result.toolCalls = parseToolCalls(result.content, toolNames)
-			if !writeSSEEvent(c, "response.created", map[string]any{
-				"type":     "response.created",
-				"response": responsesObject(id, spec.Name, "in_progress", []map[string]any{}, nil),
-			}) {
-				return
-			}
-			if len(result.toolCalls) > 0 {
-				output := []map[string]any{}
-				for index, call := range result.toolCalls {
-					fcItemID := responseID("fc")
-					item := map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": call.Arguments, "status": "completed"}
-					output = append(output, item)
-					if !writeSSEEvent(c, "response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": index, "item": map[string]any{"id": fcItemID, "type": "function_call", "call_id": call.CallID, "name": call.Name, "arguments": "", "status": "in_progress"}}) {
-						return
-					}
-					if !writeSSEEvent(c, "response.function_call_arguments.delta", map[string]any{"type": "response.function_call_arguments.delta", "item_id": fcItemID, "output_index": index, "delta": call.Arguments}) {
-						return
-					}
-					if !writeSSEEvent(c, "response.function_call_arguments.done", map[string]any{"type": "response.function_call_arguments.done", "item_id": fcItemID, "output_index": index, "arguments": call.Arguments}) {
-						return
-					}
-					if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": index, "item": item}) {
-						return
-					}
-				}
-				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
-				response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(spec.Name, result.usage, messages, len(output)))
-				if sources := adapter.SearchSourcesList(); len(sources) > 0 {
-					response["search_sources"] = sources
-				}
-				_ = writeSSEEvent(c, "response.completed", map[string]any{"type": "response.completed", "response": response})
-				_ = writeSSEDone(c)
-				return
-			}
-		}
-
-		if !createdSent {
-			if !sendCreated() {
-				return
-			}
-		}
-		contentItem := map[string]any{"type": "output_text", "text": result.content}
-		if len(result.annotations) > 0 {
-			contentItem["annotations"] = result.annotations
-		}
-		messageItem := map[string]any{"id": itemID, "type": "message", "role": "assistant", "content": []map[string]any{contentItem}}
-		if !writeSSEEvent(c, "response.output_text.done", map[string]any{
-			"type":          "response.output_text.done",
-			"item_id":       itemID,
-			"output_index":  0,
-			"content_index": 0,
-			"text":          result.content,
-		}) {
-			return
-		}
-		if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem}) {
-			return
-		}
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
-		response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(spec.Name, result.usage, messages, result.content, result.reasoning))
+		response := responsesObject(id, spec.Name, "completed", output, responsesToolUsageOrEstimate(spec.Name, result.usage, messages, len(output)))
 		if len(result.searchSources) > 0 {
 			response["search_sources"] = result.searchSources
 		}
@@ -1326,6 +1294,53 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		_ = writeSSEDone(c)
 		return
 	}
+
+	if !writeSSEEvent(c, "response.output_item.added", map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": 0,
+		"item": map[string]any{
+			"id":      itemID,
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]any{{"type": "output_text", "text": ""}},
+		},
+	}) {
+		return
+	}
+	for _, chunk := range splitStreamText(result.content, 160) {
+		if !writeSSEEvent(c, "response.output_text.delta", map[string]any{
+			"type":          "response.output_text.delta",
+			"item_id":       itemID,
+			"output_index":  0,
+			"content_index": 0,
+			"delta":         chunk,
+		}) {
+			return
+		}
+	}
+	contentItem := map[string]any{"type": "output_text", "text": result.content}
+	if len(result.annotations) > 0 {
+		contentItem["annotations"] = result.annotations
+	}
+	messageItem := map[string]any{"id": itemID, "type": "message", "role": "assistant", "content": []map[string]any{contentItem}}
+	if !writeSSEEvent(c, "response.output_text.done", map[string]any{
+		"type":          "response.output_text.done",
+		"item_id":       itemID,
+		"output_index":  0,
+		"content_index": 0,
+		"text":          result.content,
+	}) {
+		return
+	}
+	if !writeSSEEvent(c, "response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": messageItem}) {
+		return
+	}
+	response := responsesObject(id, spec.Name, "completed", []map[string]any{messageItem}, responsesUsageOrEstimate(spec.Name, result.usage, messages, result.content, result.reasoning))
+	if len(result.searchSources) > 0 {
+		response["search_sources"] = result.searchSources
+	}
+	_ = writeSSEEvent(c, "response.completed", map[string]any{"type": "response.completed", "response": response})
+	_ = writeSSEDone(c)
 }
 
 func isInvalidCredentialsBody(body string) bool {
