@@ -26,6 +26,21 @@ func TestFinalTextCompletionDelta(t *testing.T) {
 	}
 }
 
+func TestFinalTextCompletionDeltaPreservesStreamedLeadingWhitespace(t *testing.T) {
+	adapter := xai.NewStreamAdapter(nil)
+	feedFrame(t, adapter, map[string]any{
+		"modelResponse": map[string]any{"message": "PiuPiu text continues"},
+	})
+
+	result := streamResult{content: "\n\nPiuPiu text"}
+	if delta := finalTextCompletionDelta(&result, adapter); delta != " continues" {
+		t.Fatalf("delta mismatch: %q", delta)
+	}
+	if result.content != "\n\nPiuPiu text continues" {
+		t.Fatalf("content mismatch: %q", result.content)
+	}
+}
+
 func TestFinalTextCompletionDeltaSkipsDivergentFinalText(t *testing.T) {
 	adapter := xai.NewStreamAdapter(nil)
 	feedFrame(t, adapter, map[string]any{

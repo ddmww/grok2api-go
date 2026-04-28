@@ -673,6 +673,39 @@ func prepareMessage(messages []map[string]any, tools []map[string]any, toolChoic
 	return message, toolNames
 }
 
+func consumeChatStream(lines <-chan string, adapter *xai.StreamAdapter, onEvent func(xai.FrameEvent) bool) (streamResult, bool) {
+	result := streamResult{}
+	for line := range lines {
+		kind, data := xai.ClassifyLine(line)
+		if kind != "data" {
+			continue
+		}
+		for _, event := range adapter.Feed(data) {
+			switch event.Kind {
+			case "thinking":
+				result.reasoning += event.Content
+			case "text":
+				result.content += event.Content
+			case "annotation":
+				if event.AnnotationData != nil {
+					result.annotations = append(result.annotations, event.AnnotationData)
+				}
+			}
+			if onEvent != nil && !onEvent(event) {
+				return result, false
+			}
+		}
+	}
+	if trailing := adapter.FinalizeThinking(); trailing != "" {
+		event := xai.FrameEvent{Kind: "thinking", Content: trailing}
+		result.reasoning += trailing
+		if onEvent != nil && !onEvent(event) {
+			return result, false
+		}
+	}
+	return result, true
+}
+
 func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) (streamResult, error) {
 	timeoutSec := state.Config.GetInt("chat.timeout", 60)
 	if timeoutSec > 0 {
@@ -701,29 +734,8 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		}
 
 		lines, errCh := session.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
-		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
-		for line := range lines {
-			kind, data := xai.ClassifyLine(line)
-			if kind != "data" {
-				continue
-			}
-			for _, event := range adapter.Feed(data) {
-				switch event.Kind {
-				case "thinking":
-					result.reasoning += event.Content
-				case "text":
-					result.content += event.Content
-				case "annotation":
-					if event.AnnotationData != nil {
-						result.annotations = append(result.annotations, event.AnnotationData)
-					}
-				}
-			}
-		}
-		if trailing := adapter.FinalizeThinking(); trailing != "" {
-			result.reasoning += trailing
-		}
+		result, _ := consumeChatStream(lines, adapter, nil)
 
 		if err := <-errCh; err != nil {
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
@@ -735,6 +747,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			return streamResult{}, err
 		}
 
+		_ = finalTextCompletionDelta(&result, adapter)
 		if len(toolNames) > 0 {
 			result.toolCalls = parseToolCalls(result.content, toolNames)
 			if len(result.toolCalls) > 0 {
@@ -815,6 +828,12 @@ func finalTextCompletionDelta(result *streamResult, adapter *xai.StreamAdapter) 
 	if strings.HasPrefix(finalText, result.content) && len(finalText) > len(result.content) {
 		delta := finalText[len(result.content):]
 		result.content = finalText
+		return delta
+	}
+	trimmedContent := strings.TrimLeft(result.content, " \t\r\n")
+	if trimmedContent != result.content && strings.HasPrefix(finalText, trimmedContent) && len(finalText) > len(trimmedContent) {
+		delta := finalText[len(trimmedContent):]
+		result.content += delta
 		return delta
 	}
 	return ""
@@ -988,54 +1007,38 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		}
 
 		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
-		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
 		outputStarted := false
 
-		for line := range lines {
-			kind, data := xai.ClassifyLine(line)
-			if kind != "data" {
-				continue
-			}
-			for _, event := range adapter.Feed(data) {
-				switch event.Kind {
-				case "thinking":
-					result.reasoning += event.Content
-					if len(toolNames) == 0 && thinkingEnabled {
-						outputStarted = true
-						if !writeSSEData(c, map[string]any{
-							"id":      id,
-							"object":  "chat.completion.chunk",
-							"created": time.Now().Unix(),
-							"model":   spec.Name,
-							"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": event.Content}}},
-						}) {
-							return
-						}
-					}
-				case "text":
-					result.content += event.Content
-					if len(toolNames) == 0 {
-						outputStarted = true
-						if !writeSSEData(c, map[string]any{
-							"id":      id,
-							"object":  "chat.completion.chunk",
-							"created": time.Now().Unix(),
-							"model":   spec.Name,
-							"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": event.Content}}},
-						}) {
-							return
-						}
-					}
-				case "annotation":
-					if event.AnnotationData != nil {
-						result.annotations = append(result.annotations, event.AnnotationData)
-					}
+		result, ok := consumeChatStream(lines, adapter, func(event xai.FrameEvent) bool {
+			switch event.Kind {
+			case "thinking":
+				if len(toolNames) == 0 && thinkingEnabled {
+					outputStarted = true
+					return writeSSEData(c, map[string]any{
+						"id":      id,
+						"object":  "chat.completion.chunk",
+						"created": time.Now().Unix(),
+						"model":   spec.Name,
+						"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "reasoning_content": event.Content}}},
+					})
+				}
+			case "text":
+				if len(toolNames) == 0 {
+					outputStarted = true
+					return writeSSEData(c, map[string]any{
+						"id":      id,
+						"object":  "chat.completion.chunk",
+						"created": time.Now().Unix(),
+						"model":   spec.Name,
+						"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": event.Content}}},
+					})
 				}
 			}
-		}
-		if trailing := adapter.FinalizeThinking(); trailing != "" {
-			result.reasoning += trailing
+			return true
+		})
+		if !ok {
+			return
 		}
 
 		if err := <-errCh; err != nil {
@@ -1064,9 +1067,6 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		}
 
 		if len(toolNames) > 0 {
-			if finalText := adapter.FinalText(); result.content == "" && finalText != "" {
-				result.content = finalText
-			}
 			result.toolCalls = parseToolCalls(result.content, toolNames)
 			if len(result.toolCalls) > 0 {
 				for index, call := range result.toolCalls {
@@ -1181,7 +1181,6 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		}
 
 		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
-		result := streamResult{}
 		adapter := xai.NewStreamAdapter(state.Config)
 		itemID := responseID("msg")
 		createdSent := false
@@ -1206,37 +1205,26 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 			})
 		}
 
-		for line := range lines {
-			kind, data := xai.ClassifyLine(line)
-			if kind != "data" {
-				continue
-			}
-			for _, event := range adapter.Feed(data) {
-				switch event.Kind {
-				case "thinking":
-					result.reasoning += event.Content
-				case "text":
-					result.content += event.Content
-					if len(toolNames) == 0 {
-						if !sendCreated() {
-							return
-						}
-						if !writeSSEEvent(c, "response.output_text.delta", map[string]any{
-							"type":          "response.output_text.delta",
-							"item_id":       itemID,
-							"output_index":  0,
-							"content_index": 0,
-							"delta":         event.Content,
-						}) {
-							return
-						}
+		result, ok := consumeChatStream(lines, adapter, func(event xai.FrameEvent) bool {
+			switch event.Kind {
+			case "text":
+				if len(toolNames) == 0 {
+					if !sendCreated() {
+						return false
 					}
-				case "annotation":
-					if event.AnnotationData != nil {
-						result.annotations = append(result.annotations, event.AnnotationData)
-					}
+					return writeSSEEvent(c, "response.output_text.delta", map[string]any{
+						"type":          "response.output_text.delta",
+						"item_id":       itemID,
+						"output_index":  0,
+						"content_index": 0,
+						"delta":         event.Content,
+					})
 				}
 			}
+			return true
+		})
+		if !ok {
+			return
 		}
 
 		if err := <-errCh; err != nil {
@@ -1268,9 +1256,6 @@ func streamResponses(c *gin.Context, state *app.State, spec model.Spec, messages
 		}
 
 		if len(toolNames) > 0 {
-			if finalText := adapter.FinalText(); result.content == "" && finalText != "" {
-				result.content = finalText
-			}
 			result.toolCalls = parseToolCalls(result.content, toolNames)
 			if !writeSSEEvent(c, "response.created", map[string]any{
 				"type":     "response.created",
