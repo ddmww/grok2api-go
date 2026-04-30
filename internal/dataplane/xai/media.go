@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -1258,8 +1259,8 @@ func resolveImageAspectRatio(size string) string {
 }
 
 func isRateLimitedError(err error) bool {
-	upstream, ok := err.(*UpstreamError)
-	return ok && upstream.Status == http.StatusTooManyRequests
+	var upstream *UpstreamError
+	return errors.As(err, &upstream) && upstream.Status == http.StatusTooManyRequests
 }
 
 func dedupeGeneratedImages(items []GeneratedImage) []GeneratedImage {

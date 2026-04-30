@@ -1,6 +1,10 @@
 package xai
 
-import "testing"
+import (
+	"fmt"
+	"net/http"
+	"testing"
+)
 
 func TestSelectFinalOrPartialImages(t *testing.T) {
 	t.Run("prefers final over partial", func(t *testing.T) {
@@ -22,4 +26,14 @@ func TestSelectFinalOrPartialImages(t *testing.T) {
 			t.Fatalf("unexpected selection: %#v stage=%s", selected, stage)
 		}
 	})
+}
+
+func TestIsRateLimitedErrorUnwrapsUpstreamError(t *testing.T) {
+	err := fmt.Errorf("bad response status code 429, message: %w", &UpstreamError{
+		Status: http.StatusTooManyRequests,
+		Body:   `{"error":{"code":8,"message":"Too many requests","details":[]}}`,
+	})
+	if !isRateLimitedError(err) {
+		t.Fatalf("isRateLimitedError() = false, want true")
+	}
 }

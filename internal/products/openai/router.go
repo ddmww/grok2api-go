@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -437,12 +438,14 @@ func writeOpenAIError(c *gin.Context, err error) {
 	status := httpStatusForError(err)
 	errorType := openAIErrorType(status)
 	errorCode := ""
-	if blocked, ok := err.(*upstreamblocker.Error); ok {
+	var blocked *upstreamblocker.Error
+	if errors.As(err, &blocked) {
 		message = blocked.Error()
 		errorType = "upstream_blocked"
 		errorCode = "upstream_blocked"
 	}
-	if upstream, ok := err.(*xai.UpstreamError); ok && upstream.Status == http.StatusForbidden && strings.TrimSpace(upstream.Body) == "" {
+	var upstream *xai.UpstreamError
+	if errors.As(err, &upstream) && upstream.Status == http.StatusForbidden && strings.TrimSpace(upstream.Body) == "" {
 		message = "Upstream returned 403 (challenge or permission denied)"
 	}
 	body := gin.H{"message": message, "type": errorType}
@@ -471,7 +474,8 @@ func httpStatusForError(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-	if upstream, ok := err.(*xai.UpstreamError); ok {
+	var upstream *xai.UpstreamError
+	if errors.As(err, &upstream) {
 		switch upstream.Status {
 		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusTooManyRequests:
 			return upstream.Status
@@ -484,7 +488,8 @@ func httpStatusForError(err error) int {
 	if strings.Contains(strings.ToLower(err.Error()), "no available accounts") {
 		return http.StatusTooManyRequests
 	}
-	if _, ok := err.(*upstreamblocker.Error); ok {
+	var blocked *upstreamblocker.Error
+	if errors.As(err, &blocked) {
 		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
@@ -539,8 +544,8 @@ func shouldRetry(err error, retryCodes map[int]struct{}, attempt, maxRetries int
 	if attempt >= maxRetries {
 		return false
 	}
-	upstream, ok := err.(*xai.UpstreamError)
-	if !ok {
+	var upstream *xai.UpstreamError
+	if !errors.As(err, &upstream) {
 		return false
 	}
 	if isInvalidCredentialsError(upstream) {
@@ -584,7 +589,8 @@ func reserveLease(state *app.State, spec model.Spec, excluded map[string]struct{
 
 func feedbackForError(err error) account.Feedback {
 	feedback := account.Feedback{Kind: account.FeedbackServerError, Reason: err.Error()}
-	if upstream, ok := err.(*xai.UpstreamError); ok {
+	var upstream *xai.UpstreamError
+	if errors.As(err, &upstream) {
 		switch upstream.Status {
 		case http.StatusUnauthorized:
 			feedback.Kind = account.FeedbackUnauthorized

@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -982,8 +983,8 @@ func shouldRetryAnthropic(err error, retryCodes map[int]struct{}, attempt, maxRe
 	if attempt >= maxRetries {
 		return false
 	}
-	upstream, ok := err.(*xai.UpstreamError)
-	if !ok {
+	var upstream *xai.UpstreamError
+	if !errors.As(err, &upstream) {
 		return false
 	}
 	if isInvalidCredentialsError(upstream) {
@@ -1018,7 +1019,8 @@ func isInvalidCredentialsError(err *xai.UpstreamError) bool {
 
 func feedbackForAnthropic(err error) account.Feedback {
 	feedback := account.Feedback{Kind: account.FeedbackServerError, Reason: err.Error()}
-	if upstream, ok := err.(*xai.UpstreamError); ok {
+	var upstream *xai.UpstreamError
+	if errors.As(err, &upstream) {
 		switch upstream.Status {
 		case http.StatusUnauthorized:
 			feedback.Kind = account.FeedbackUnauthorized
@@ -1089,7 +1091,8 @@ func responseID(prefix string) string {
 
 func writeAnthropicError(c *gin.Context, err error) {
 	errorType := "api_error"
-	if _, ok := err.(*upstreamblocker.Error); ok {
+	var blocked *upstreamblocker.Error
+	if errors.As(err, &blocked) {
 		errorType = "upstream_blocked"
 	}
 	c.JSON(httpStatusForError(err), gin.H{
@@ -1102,10 +1105,12 @@ func writeAnthropicError(c *gin.Context, err error) {
 }
 
 func httpStatusForError(err error) int {
-	if _, ok := err.(*upstreamblocker.Error); ok {
+	var blocked *upstreamblocker.Error
+	if errors.As(err, &blocked) {
 		return http.StatusForbidden
 	}
-	if upstream, ok := err.(*xai.UpstreamError); ok {
+	var upstream *xai.UpstreamError
+	if errors.As(err, &upstream) {
 		if upstream.Status > 0 {
 			return upstream.Status
 		}
