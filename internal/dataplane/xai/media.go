@@ -90,6 +90,11 @@ type VideoResult struct {
 	Thumbnail string
 }
 
+type editReference struct {
+	FileID string
+	URL    string
+}
+
 func uniqueURLs(items []string) []string {
 	out := make([]string, 0, len(items))
 	seen := map[string]struct{}{}
@@ -329,7 +334,7 @@ func (s *RequestSession) DownloadContent(ctx context.Context, token, rawURL stri
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = "https://assets.grok.com/" + strings.TrimLeft(target, "/")
 	}
-	resp, err := s.doRequest(ctx, http.MethodGet, target, token, "application/json", "https://grok.com", "https://grok.com/", nil)
+	resp, err := s.downloadContentRequest(ctx, token, target)
 	if err != nil {
 		return nil, "", err
 	}
@@ -346,6 +351,57 @@ func (s *RequestSession) DownloadContent(ctx context.Context, token, rawURL stri
 		contentType = inferContentType(target)
 	}
 	return body, contentType, nil
+}
+
+func (s *RequestSession) downloadContentRequest(ctx context.Context, token, target string) (*http.Response, error) {
+	client := s.currentClient()
+	if client == nil {
+		return nil, errors.New("request session is closed")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	headers := s.parent.buildHeaders(s.proxyURL, token, "", "https://grok.com", "https://grok.com/")
+	headers.Del("Content-Type")
+	headers.Del("Origin")
+	headers.Set("Accept", assetDownloadAccept(inferContentType(target)))
+	headers.Set("Cache-Control", "no-cache")
+	headers.Set("Pragma", "no-cache")
+	headers.Set("Priority", "u=0, i")
+	headers.Set("Sec-Fetch-Dest", "document")
+	headers.Set("Sec-Fetch-Mode", "navigate")
+	headers.Set("Sec-Fetch-Site", "none")
+	headers.Set("Sec-Fetch-User", "?1")
+	headers.Set("Upgrade-Insecure-Requests", "1")
+	request.Header = headers
+	response, err := client.Do(request)
+	if err != nil {
+		_ = s.reset()
+		return nil, transportError(err)
+	}
+	if isResettableStatus(s.parent.cfg, response.StatusCode) {
+		if resetErr := s.reset(); resetErr != nil {
+			response.Body.Close()
+			return nil, resetErr
+		}
+	}
+	if err := decodeResponseBody(response); err != nil {
+		response.Body.Close()
+		return nil, err
+	}
+	return response, nil
+}
+
+func assetDownloadAccept(contentType string) string {
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+	case strings.HasPrefix(contentType, "video/"):
+		return "video/webm,video/mp4,video/*,*/*;q=0.8"
+	default:
+		return "*/*"
+	}
 }
 
 func inferContentType(rawURL string) string {
@@ -1358,20 +1414,21 @@ func maxIntLocal(a, b int) int {
 }
 
 func (c *Client) EditImages(ctx context.Context, token string, req ImageEditRequest) ([]GeneratedImage, error) {
-	refs := make([]string, 0, len(req.Inputs))
-	for _, item := range req.Inputs {
+	refs := make([]editReference, 0, len(req.Inputs))
+	for index, item := range req.Inputs {
 		asset, err := c.UploadFromInput(ctx, token, item)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("image edit reference %d upload failed: %w", index+1, err)
 		}
 		if asset.URL != "" {
-			refs = append(refs, asset.URL)
+			refs = append(refs, editReference{FileID: asset.FileID, URL: asset.URL})
 		}
 	}
 	if len(refs) == 0 {
 		return nil, fmt.Errorf("image edit requires at least one image input")
 	}
-	post, err := c.CreateMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", "", req.Prompt, "https://grok.com/imagine")
+	prompt := replaceEditImagePlaceholders(req.Prompt, refs)
+	post, err := c.CreateMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", "", prompt, "https://grok.com/imagine")
 	if err != nil {
 		return nil, err
 	}
@@ -1386,7 +1443,11 @@ func (c *Client) EditImages(ctx context.Context, token string, req ImageEditRequ
 	if postID == "" {
 		return nil, fmt.Errorf("image edit create-post returned no post id")
 	}
-	payload := buildImageEditPayload(req.Prompt, refs, postID, c.cfg.GetBool("features.temporary", true), c.cfg.GetBool("features.memory", false))
+	refURLs := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		refURLs = append(refURLs, ref.URL)
+	}
+	payload := buildImageEditPayload(prompt, refURLs, postID, c.cfg.GetBool("features.temporary", true), c.cfg.GetBool("features.memory", false))
 	frames, err := c.streamJSON(ctx, token, payload)
 	if err != nil {
 		return nil, err
@@ -1445,6 +1506,20 @@ func (c *Client) EditImages(ctx context.Context, token string, req ImageEditRequ
 	return out, nil
 }
 
+func replaceEditImagePlaceholders(prompt string, refs []editReference) string {
+	return regexp.MustCompile(`(?i)@IMAGE(\d+)\b`).ReplaceAllStringFunc(prompt, func(match string) string {
+		sub := regexp.MustCompile(`\d+`).FindString(match)
+		var index int
+		if _, err := fmt.Sscanf(sub, "%d", &index); err != nil || index < 1 || index > len(refs) {
+			return match
+		}
+		if refs[index-1].FileID == "" {
+			return match
+		}
+		return "@" + refs[index-1].FileID
+	})
+}
+
 func resolveVideoAspectRatio(size string) string {
 	switch strings.TrimSpace(size) {
 	case "1280x720", "1792x1024":
@@ -1483,10 +1558,14 @@ func (c *Client) CreateVideo(ctx context.Context, token string, req VideoRequest
 		parentPostID, _ = parentPost["id"].(string)
 	}
 	refs := make([]string, 0, len(req.InputReferences))
-	for _, item := range req.InputReferences {
+	for index, item := range req.InputReferences {
+		if isUpstreamAssetContentURL(item) {
+			refs = append(refs, item)
+			continue
+		}
 		asset, uploadErr := c.UploadFromInput(ctx, token, item)
 		if uploadErr != nil {
-			return nil, uploadErr
+			return nil, fmt.Errorf("video input reference %d upload failed: %w", index+1, uploadErr)
 		}
 		if asset.URL != "" {
 			refs = append(refs, asset.URL)
@@ -1531,6 +1610,11 @@ func (c *Client) CreateVideo(ctx context.Context, token string, req VideoRequest
 		result.Progress = 100
 	}
 	return result, nil
+}
+
+func isUpstreamAssetContentURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Host, "assets.grok.com") && strings.HasSuffix(parsed.Path, "/content")
 }
 
 func cacheFileID(raw string) string {

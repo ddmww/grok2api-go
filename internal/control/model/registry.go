@@ -54,8 +54,8 @@ func ModeCandidates(spec Spec, autoFallback bool) []string {
 
 var models = []Spec{
 	{Name: "grok-4.20-0309-non-reasoning", Mode: "fast", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Non-Reasoning"},
-	{Name: "grok-4.20-0309", Mode: "auto", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309"},
-	{Name: "grok-4.20-0309-reasoning", Mode: "expert", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Reasoning"},
+	{Name: "grok-4.20-0309", Mode: "auto", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309"},
+	{Name: "grok-4.20-0309-reasoning", Mode: "expert", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Reasoning"},
 	{Name: "grok-4.20-0309-non-reasoning-super", Mode: "fast", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Non-Reasoning Super"},
 	{Name: "grok-4.20-0309-super", Mode: "auto", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Super"},
 	{Name: "grok-4.20-0309-reasoning-super", Mode: "expert", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Reasoning Super"},
@@ -64,8 +64,8 @@ var models = []Spec{
 	{Name: "grok-4.20-0309-reasoning-heavy", Mode: "expert", Pool: "heavy", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 0309 Reasoning Heavy"},
 	{Name: "grok-4.20-multi-agent-0309", Mode: "heavy", Pool: "heavy", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Multi-Agent 0309"},
 	{Name: "grok-4.20-fast", Mode: "fast", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Fast", PreferBest: true},
-	{Name: "grok-4.20-auto", Mode: "auto", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Auto", PreferBest: true},
-	{Name: "grok-4.20-expert", Mode: "expert", Pool: "basic", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Expert", PreferBest: true},
+	{Name: "grok-4.20-auto", Mode: "auto", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Auto", PreferBest: true},
+	{Name: "grok-4.20-expert", Mode: "expert", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Expert", PreferBest: true},
 	{Name: "grok-4.20-heavy", Mode: "heavy", Pool: "heavy", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.20 Heavy", PreferBest: true},
 	{Name: "grok-4.3-beta", Mode: "grok-420-computer-use-sa", Pool: "super", Capability: CapabilityChat, Enabled: true, PublicName: "Grok 4.3 Beta"},
 	{Name: "grok-imagine-image-lite", Mode: "fast", Pool: "basic", Capability: CapabilityImage, Enabled: true, PublicName: "Grok Imagine Image Lite"},

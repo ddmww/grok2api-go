@@ -47,7 +47,7 @@ func (s *Service) Start() {
 		interval int
 	}
 	loops := []loop{
-		{pool: "basic", interval: s.cfg.GetInt("account.refresh.basic_interval_sec", 36000)},
+		{pool: "basic", interval: s.cfg.GetInt("account.refresh.basic_interval_sec", 86400)},
 		{pool: "super", interval: s.cfg.GetInt("account.refresh.super_interval_sec", 7200)},
 		{pool: "heavy", interval: s.cfg.GetInt("account.refresh.heavy_interval_sec", 7200)},
 	}
@@ -395,7 +395,7 @@ func (s *Service) poolInterval(pool string) int64 {
 	case "heavy":
 		return int64(s.cfg.GetInt("account.refresh.heavy_interval_sec", 7200)) * 1000
 	default:
-		return int64(s.cfg.GetInt("account.refresh.basic_interval_sec", 36000)) * 1000
+		return int64(s.cfg.GetInt("account.refresh.basic_interval_sec", 86400)) * 1000
 	}
 }
 

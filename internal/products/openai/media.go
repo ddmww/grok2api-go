@@ -40,6 +40,11 @@ type preparedImageOutput struct {
 	B64JSON   string
 }
 
+const (
+	imageEditMaxReferences = 7
+	videoMaxReferences     = 7
+)
+
 func cacheImageSourcePrefix(item xai.GeneratedImage) string {
 	switch strings.ToLower(strings.TrimSpace(item.Source)) {
 	case "app_chat":
@@ -144,6 +149,14 @@ func localImageURL(state *app.State, id string) string {
 
 func localVideoURL(state *app.State, id string) string {
 	return appURL(state) + "/v1/files/video?id=" + url.QueryEscape(id)
+}
+
+func isImaginePublicURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(parsed.Hostname()), "imagine-public")
 }
 
 func fileIDFromURL(raw string) string {
@@ -312,6 +325,16 @@ func prepareImageOutput(ctx context.Context, state *app.State, token string, ite
 		}
 		return localURL
 	}
+	if configured == "grok_url" || configured == "grok_md" {
+		if isImaginePublicURL(upstreamURL) && state.Config.GetBool("features.imagine_public_image_proxy", false) {
+			if urlValue := getLocal(); urlValue != "" {
+				if configured == "grok_md" {
+					return preparedImageOutput{APIURL: urlValue, ChatValue: markdownImage(urlValue)}, nil
+				}
+				return preparedImageOutput{APIURL: urlValue, ChatValue: urlValue}, nil
+			}
+		}
+	}
 
 	switch configured {
 	case "local_url":
@@ -436,6 +459,51 @@ func extractImageInputs(messages []map[string]any) []string {
 	return inputs
 }
 
+func extractVideoPromptAndReferences(messages []map[string]any) (string, []string) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if role, _ := messages[index]["role"].(string); role != "user" {
+			continue
+		}
+		content := messages[index]["content"]
+		text := stringifyContent(content)
+		inputs := extractContentImageInputs(content)
+		if strings.TrimSpace(text) != "" || len(inputs) > 0 {
+			if len(inputs) > videoMaxReferences {
+				inputs = inputs[:videoMaxReferences]
+			}
+			return text, inputs
+		}
+	}
+	return "", nil
+}
+
+func extractContentImageInputs(content any) []string {
+	switch typed := content.(type) {
+	case []map[string]any:
+		inputs := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if raw := extractImageInputURL(item); raw != "" {
+				inputs = append(inputs, raw)
+			}
+		}
+		return inputs
+	case []any:
+		inputs := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			mapped, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if raw := extractImageInputURL(mapped); raw != "" {
+				inputs = append(inputs, raw)
+			}
+		}
+		return inputs
+	default:
+		return nil
+	}
+}
+
 func extractImageInputURL(item map[string]any) string {
 	if item == nil {
 		return ""
@@ -537,9 +605,13 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 	if err != nil {
 		return nil, err
 	}
+	inputs := extractImageInputs(messages)
+	if len(inputs) > imageEditMaxReferences {
+		inputs = inputs[len(inputs)-imageEditMaxReferences:]
+	}
 	items, err := state.XAI.EditImages(ctx, lease.Token, xai.ImageEditRequest{
 		Prompt: extractPromptFromMessages(messages),
-		Inputs: extractImageInputs(messages),
+		Inputs: inputs,
 		Size:   cfg.Size,
 	})
 	if err != nil {
@@ -575,18 +647,19 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 }
 
-func createVideo(ctx context.Context, state *app.State, spec model.Spec, prompt string, cfg videoConfig) (map[string]any, error) {
+func createVideo(ctx context.Context, state *app.State, spec model.Spec, prompt string, cfg videoConfig, inputReferences []string) (map[string]any, error) {
 	lease, err := reserveLease(state, spec, nil)
 	if err != nil {
 		return nil, err
 	}
 	video, err := state.XAI.CreateVideo(ctx, lease.Token, xai.VideoRequest{
-		Model:          spec.Name,
-		Prompt:         prompt,
-		Seconds:        cfg.Seconds,
-		Size:           cfg.Size,
-		ResolutionName: cfg.ResolutionName,
-		Preset:         cfg.Preset,
+		Model:           spec.Name,
+		Prompt:          prompt,
+		Seconds:         cfg.Seconds,
+		Size:            cfg.Size,
+		ResolutionName:  cfg.ResolutionName,
+		Preset:          cfg.Preset,
+		InputReferences: inputReferences,
 	})
 	if err != nil {
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))

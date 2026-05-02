@@ -296,13 +296,17 @@
           "label": "图片返回格式",
           "desc": "grok_url / grok_md 直接返回 Grok CDN 地址，客户端需具备 CDN 访问能力；local_* 模式会先下载到服务端，再通过本地 URL 代理分发；base64 会以内嵌 Data URI 返回。"
         },
+        "imaginePublicImageProxy": {
+          "label": "公开图片本地代理",
+          "desc": "当图片返回格式为 grok_url / grok_md 且上游返回 imagine-public CDN 时，先缓存到本地并返回本地代理地址。"
+        },
         "videoFormat": {
           "label": "视频返回格式",
           "desc": "local_* 模式会先将视频下载至服务端，再通过本地 URL 代理分发；请确保已配置 APP 访问地址，并评估出站带宽消耗。"
         },
         "basicInterval": {
           "label": "Basic 刷新周期（秒）",
-          "desc": "basic 号池额度的定时刷新间隔，建议与配额窗口对齐（默认 36000 s / 10 h）。"
+          "desc": "basic 号池额度的定时刷新间隔，建议与配额窗口对齐（默认 86400 s / 24 h）。"
         },
         "superInterval": {
           "label": "Super 刷新周期（秒）",

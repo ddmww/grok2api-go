@@ -406,6 +406,17 @@ const SCHEMA_DEF = [
             descKey: 'config.schema.fields.imageFormat.desc',
           },
           {
+            key: 'imagine_public_image_proxy',
+            label: '公开图片本地代理',
+            labelKey: 'config.schema.fields.imaginePublicImageProxy.label',
+            type: 'bool',
+            desc: '当图片返回格式为 grok_url / grok_md 且上游返回 imagine-public CDN 时，先缓存到本地并返回本地代理地址。',
+            descKey: 'config.schema.fields.imaginePublicImageProxy.desc',
+            disabledWhen: 'no_app_url',
+            disabledTip: '请先填写 APP 访问地址',
+            disabledTipKey: 'config.disabledTip.appUrlRequired',
+          },
+          {
             key: 'video_format',
             label: '视频返回格式',
             labelKey: 'config.schema.fields.videoFormat.label',

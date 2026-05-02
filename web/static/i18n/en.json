@@ -296,13 +296,17 @@
           "label": "Image Output Format",
           "desc": "grok_url and grok_md return the native Grok CDN address directly. local_* modes download assets to the server first and re-expose them through the local proxy. base64 returns an inline Data URI."
         },
+        "imaginePublicImageProxy": {
+          "label": "Local Proxy for Public Images",
+          "desc": "When the image format is grok_url or grok_md and upstream returns an imagine-public CDN URL, cache it locally and return the local proxy URL instead."
+        },
         "videoFormat": {
           "label": "Video Output Format",
           "desc": "local_* modes download video assets to the server and deliver them through the local proxy. Configure the APP Base URL first and account for outbound bandwidth usage."
         },
         "basicInterval": {
           "label": "Basic Refresh Interval (s)",
-          "desc": "Scheduled quota refresh interval for the basic pool. Align this with the quota window when possible (default 36000 s / 10 h)."
+          "desc": "Scheduled quota refresh interval for the basic pool. Align this with the quota window when possible (default 86400 s / 24 h)."
         },
         "superInterval": {
           "label": "Super Refresh Interval (s)",

@@ -253,6 +253,16 @@ func (c *Client) endpoint(path string) string {
 	return c.baseURL() + path
 }
 
+func (c *Client) accountsEndpoint(path string) string {
+	if c == nil || c.cfg == nil {
+		return "https://accounts.x.ai" + path
+	}
+	if value := strings.TrimSpace(c.cfg.GetString("proxy.upstream.base_url", "")); value != "" {
+		return strings.TrimRight(value, "/") + path
+	}
+	return "https://accounts.x.ai" + path
+}
+
 func (c *Client) buildHeaders(proxyURL, token, contentType, origin, referer string) http.Header {
 	bundle, _ := c.proxy.Clearance(proxyURL)
 	return buildRequestHeaders(c.cfg, token, contentType, origin, referer, bundle)
@@ -778,6 +788,23 @@ func (s *RequestSession) SetBirthDate(ctx context.Context, token string) error {
 	return nil
 }
 
+func (s *RequestSession) AcceptTOS(ctx context.Context, token string) error {
+	ctx, cancel := s.parent.withConfigTimeout(ctx, "nsfw.timeout", 60)
+	defer cancel()
+	protobuf := []byte{0x10, 0x01}
+	frame := append([]byte{0x00, 0x00, 0x00, 0x00, byte(len(protobuf))}, protobuf...)
+	resp, err := s.doRequest(ctx, http.MethodPost, s.parent.accountsEndpoint("/auth_mgmt.AuthManagement/SetTosAcceptedVersion"), token, "application/grpc-web+proto", "https://accounts.x.ai", "https://accounts.x.ai/accept-tos", bytes.NewReader(frame))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	}
+	return nil
+}
+
 func (s *RequestSession) SetNSFW(ctx context.Context, token string, enabled bool) error {
 	ctx, cancel := s.parent.withConfigTimeout(ctx, "nsfw.timeout", 60)
 	defer cancel()
@@ -925,6 +952,15 @@ func (c *Client) SetBirthDate(ctx context.Context, token string) error {
 	}
 	defer session.Close()
 	return session.SetBirthDate(ctx, token)
+}
+
+func (c *Client) AcceptTOS(ctx context.Context, token string) error {
+	session, err := c.newRequestSession(false)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	return session.AcceptTOS(ctx, token)
 }
 
 func (c *Client) SetNSFW(ctx context.Context, token string, enabled bool) error {

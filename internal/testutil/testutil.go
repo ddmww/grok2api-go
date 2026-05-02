@@ -96,6 +96,9 @@ func NewFakeGrokServer() *FakeGrokServer {
 	mux.HandleFunc("/auth_mgmt.AuthManagement/UpdateUserFeatureControls", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/auth_mgmt.AuthManagement/SetTosAcceptedVersion", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/rest/assets", fake.handleAssets)
 	mux.HandleFunc("/rest/assets-metadata/", fake.handleDeleteAsset)
 	mux.HandleFunc("/rest/app-chat/upload-file", fake.handleUpload)

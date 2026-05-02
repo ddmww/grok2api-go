@@ -284,6 +284,9 @@
         "imageFormat": {
           "label": "Bildausgabeformat"
         },
+        "imaginePublicImageProxy": {
+          "label": "Lokaler Proxy für öffentliche Bilder"
+        },
         "videoFormat": {
           "label": "Videoausgabeformat"
         },

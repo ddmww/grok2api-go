@@ -44,6 +44,8 @@ custom_instruction = ""
 #   local_md  — Markdown 内嵌本地代理 URL
 #   base64    — Markdown 内嵌 Base64 Data URI
 image_format = "grok_url"
+# Imagine WebSocket 返回的 imagine-public 图片默认直返；开启后下载到本地并返回本地代理 URL
+imagine_public_image_proxy = false
 
 # 视频返回格式
 #   grok_url  — 直接返回 Grok CDN URL
@@ -112,7 +114,7 @@ on_codes = "429,401,502,503"
 
 
 [account.refresh]
-basic_interval_sec = 36000   # basic 号池刷新周期（秒），默认 10 h
+basic_interval_sec = 86400   # basic 号池刷新周期（秒），默认 24 h
 super_interval_sec = 7200    # super 号池刷新周期（秒），默认 2 h
 heavy_interval_sec = 7200    # heavy 号池刷新周期（秒），默认 2 h
 usage_concurrency = 50

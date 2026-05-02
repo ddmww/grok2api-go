@@ -284,6 +284,9 @@
         "imageFormat": {
           "label": "画像出力形式"
         },
+        "imaginePublicImageProxy": {
+          "label": "公開画像のローカルプロキシ"
+        },
         "videoFormat": {
           "label": "動画出力形式"
         },

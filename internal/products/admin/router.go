@@ -1231,6 +1231,9 @@ func executeBatchItem(ctx context.Context, state *app.State, kind string, enable
 		}
 		defer session.Close()
 		if enabled {
+			if err := session.AcceptTOS(ctx, token); err != nil {
+				return nil, nil, err
+			}
 			if err := session.SetBirthDate(ctx, token); err != nil {
 				return nil, nil, err
 			}

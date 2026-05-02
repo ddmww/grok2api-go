@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -160,7 +161,8 @@ func Mount(router *gin.Engine, state *app.State) {
 					c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
 					return
 				}
-				result, err := createVideo(c.Request.Context(), state, spec, extractPromptFromMessages(request.Messages), cfg)
+				prompt, inputReferences := extractVideoPromptAndReferences(request.Messages)
+				result, err := createVideo(c.Request.Context(), state, spec, prompt, cfg, inputReferences)
 				if err != nil {
 					writeOpenAIError(c, err)
 					return
@@ -372,7 +374,12 @@ func Mount(router *gin.Engine, state *app.State) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
 				return
 			}
-			result, err := createVideo(c.Request.Context(), state, spec, c.PostForm("prompt"), cfg)
+			inputReferences, err := parseVideoInputReferences(c)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "type": "invalid_request_error"}})
+				return
+			}
+			result, err := createVideo(c.Request.Context(), state, spec, c.PostForm("prompt"), cfg, inputReferences)
 			if err != nil {
 				writeOpenAIError(c, err)
 				return
@@ -406,6 +413,50 @@ func derefImageConfig(cfg *imageConfig) imageConfig {
 		return imageConfig{}
 	}
 	return *cfg
+}
+
+func parseVideoInputReferences(c *gin.Context) ([]string, error) {
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if !strings.Contains(contentType, "multipart/form-data") {
+		return nil, nil
+	}
+	form, err := c.MultipartForm()
+	if err != nil {
+		return nil, err
+	}
+	files := append([]*multipart.FileHeader{}, form.File["input_reference[]"]...)
+	files = append(files, form.File["input_reference"]...)
+	if len(files) == 0 {
+		return nil, nil
+	}
+	capacity := len(files)
+	if capacity > videoMaxReferences {
+		capacity = videoMaxReferences
+	}
+	inputs := make([]string, 0, capacity)
+	for _, file := range files {
+		if len(inputs) >= videoMaxReferences {
+			break
+		}
+		mimeType := strings.TrimSpace(file.Header.Get("Content-Type"))
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		if !strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+			return nil, fmt.Errorf("input_reference must be an image file")
+		}
+		handle, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		data, readErr := io.ReadAll(handle)
+		_ = handle.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		inputs = append(inputs, "data:"+mimeType+";base64,"+base64.StdEncoding.EncodeToString(data))
+	}
+	return inputs, nil
 }
 
 func derefVideoConfig(cfg *videoConfig) videoConfig {
