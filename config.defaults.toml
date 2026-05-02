@@ -57,7 +57,7 @@ video_format = "grok_url"
 
 # ==================== 上游拦截 ====================
 [upstream_blocker]
-# 是否启用上游关键词拦截（仅影响非流式文本接口）
+# 是否启用上游关键词拦截；非流式检查完整响应，流式在 chat.stream_retry_buffer_runes 缓冲窗口内检查
 enabled = false
 # 是否大小写敏感
 case_sensitive = false

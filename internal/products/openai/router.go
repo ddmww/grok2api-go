@@ -506,6 +506,28 @@ func writeOpenAIError(c *gin.Context, err error) {
 	c.JSON(status, gin.H{"error": body})
 }
 
+func writeStreamOpenAIError(c *gin.Context, err error) {
+	message := err.Error()
+	status := httpStatusForError(err)
+	errorType := openAIErrorType(status)
+	errorCode := ""
+	var blocked *upstreamblocker.Error
+	if errors.As(err, &blocked) {
+		message = blocked.Error()
+		errorType = "upstream_blocked"
+		errorCode = "upstream_blocked"
+	}
+	body := map[string]any{"message": message, "type": errorType}
+	if errorCode != "" {
+		body["code"] = errorCode
+	}
+	_ = writeSSEData(c, map[string]any{
+		"status_code": status,
+		"error":       body,
+	})
+	_ = writeSSEDone(c)
+}
+
 func openAIErrorType(status int) string {
 	switch status {
 	case http.StatusBadRequest:
@@ -1105,14 +1127,23 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		streamRetryEnabled := state.Config.GetBool("chat.stream_retry_enabled", true)
 		bufferedEvents := []map[string]any{}
 		bufferedRunes := 0
+		var blockerCandidate strings.Builder
 		streamRetryBufferRunes := state.Config.GetInt("chat.stream_retry_buffer_runes", 320)
 		if !streamRetryEnabled || streamRetryBufferRunes < 0 {
 			streamRetryBufferRunes = 0
 		}
+		streamBlockerCfg := upstreamblocker.GetConfig(state.Config)
+		streamBlockerEnabled := streamBlockerCfg.Enabled && streamRetryBufferRunes > 0
 
 		flushBuffered := func() bool {
 			if len(bufferedEvents) == 0 {
 				return true
+			}
+			if streamBlockerEnabled {
+				if err := upstreamblocker.AssertResponseAllowed(streamBlockerCfg, blockerCandidate.String(), "/v1/chat/completions"); err != nil {
+					writeStreamOpenAIError(c, err)
+					return false
+				}
 			}
 			for _, payload := range bufferedEvents {
 				if !writeSSEData(c, payload) {
@@ -1131,6 +1162,9 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 			}
 			bufferedEvents = append(bufferedEvents, payload)
 			bufferedRunes += runeCount(content)
+			if streamBlockerEnabled {
+				blockerCandidate.WriteString(content)
+			}
 			if bufferedRunes >= streamRetryBufferRunes {
 				return flushBuffered()
 			}
