@@ -24,12 +24,25 @@ type runtimeItem struct {
 type Runtime struct {
 	mu       sync.RWMutex
 	repo     Repository
+	cfg      configReader
 	items    map[string]*runtimeItem
 	revision int64
 }
 
-func NewRuntime(repo Repository) *Runtime {
-	return &Runtime{repo: repo, items: map[string]*runtimeItem{}}
+type configReader interface {
+	GetBool(string, bool) bool
+}
+
+func NewRuntime(repo Repository, cfg ...configReader) *Runtime {
+	runtime := &Runtime{repo: repo, items: map[string]*runtimeItem{}}
+	if len(cfg) > 0 {
+		runtime.cfg = cfg[0]
+	}
+	return runtime
+}
+
+func (r *Runtime) ignoreQuotaSelection() bool {
+	return r != nil && r.cfg != nil && r.cfg.GetBool("account.selection.ignore_quota", false)
 }
 
 func (r *Runtime) Sync(ctx context.Context) error {
@@ -87,6 +100,7 @@ func (r *Runtime) Reserve(spec model.Spec) (*Lease, error) {
 }
 
 func (r *Runtime) ReserveWithExclude(spec model.Spec, excluded map[string]struct{}) (*Lease, error) {
+	ignoreQuota := r.ignoreQuotaSelection()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := NowMS()
@@ -105,11 +119,13 @@ func (r *Runtime) ReserveWithExclude(spec model.Spec, excluded map[string]struct
 			if record.Pool != pool || record.IsDeleted() || record.EffectiveStatus(now) != StatusActive {
 				continue
 			}
-			window := maybeResetQuotaWindow(record, spec.Mode, now)
-			if window == nil || window.Remaining <= 0 {
-				continue
+			if !ignoreQuota {
+				window := maybeResetQuotaWindow(record, spec.Mode, now)
+				if window == nil || window.Remaining <= 0 {
+					continue
+				}
 			}
-			score := candidateScore(*record, item.inflight, spec.Mode, now)
+			score := candidateScore(*record, item.inflight, spec.Mode, now, ignoreQuota)
 			lastUseAt := record.LastUseAt
 			if score > bestScore || (score == bestScore && (lastUseAt < bestUseAt || (lastUseAt == bestUseAt && record.Token < bestToken))) {
 				chosen = item
@@ -164,12 +180,15 @@ func quotaWindowPtr(quota *QuotaSet, mode string) *QuotaWindow {
 	}
 }
 
-func candidateScore(record Record, inflight int, mode string, now int64) float64 {
+func candidateScore(record Record, inflight int, mode string, now int64, ignoreQuota bool) float64 {
 	window := record.Quota.Window(mode)
-	if window == nil || window.Remaining <= 0 {
+	if !ignoreQuota && (window == nil || window.Remaining <= 0) {
 		return math.Inf(-1)
 	}
-	score := float64(window.Remaining * 25)
+	score := float64(100)
+	if !ignoreQuota && window != nil {
+		score = float64(window.Remaining * 25)
+	}
 	score -= float64(inflight * 20)
 	failCount := record.UsageFailCount
 	if failCount > 10 {

@@ -82,6 +82,64 @@ func TestRefreshTokensRecoversCoolingAndWritesDetailedQuota(t *testing.T) {
 	}
 }
 
+func TestRefreshTokensMarksCoolingOn429(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ACCOUNT_STORAGE", "local")
+	t.Setenv("DATA_DIR", dataDir)
+	t.Setenv("ACCOUNT_LOCAL_PATH", filepath.Join(dataDir, "accounts.db"))
+	if err := paths.EnsureRuntimeDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+
+	repo, err := account.NewRepositoryFromEnv()
+	if err != nil {
+		t.Fatalf("new repo: %v", err)
+	}
+	defer repo.Close()
+	if err := repo.Initialize(context.Background()); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	if _, err := repo.UpsertAccounts(context.Background(), []account.Upsert{{Token: "token-1", Pool: "basic"}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	fake := testutil.NewFakeGrokServer()
+	defer fake.Close()
+	fake.RateLimitMode = "rate_limit"
+	cfg := testutil.NewConfig(map[string]any{
+		"proxy": map[string]any{
+			"egress":   map[string]any{"mode": "direct"},
+			"upstream": map[string]any{"base_url": fake.BaseURL()},
+		},
+		"account": map[string]any{
+			"refresh": map[string]any{"usage_concurrency": 1},
+		},
+	})
+	runtime := account.NewRuntime(repo, cfg)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+	service := New(repo, runtime, cfg, xai.NewClient(cfg, proxy.NewRuntime(cfg)))
+
+	result, err := service.RefreshTokens(context.Background(), []string{"token-1"})
+	if err != nil {
+		t.Fatalf("refresh tokens: %v", err)
+	}
+	if result.Checked != 1 || result.Refreshed != 0 || result.Recovered != 0 || result.Failed != 0 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	records, err := repo.GetAccounts(context.Background(), []string{"token-1"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("get refreshed record: %v %#v", err, records)
+	}
+	if records[0].Status != account.StatusCooling {
+		t.Fatalf("expected cooling after refresh 429, got %#v", records[0])
+	}
+	if records[0].StateReason != "rate_limited" {
+		t.Fatalf("expected rate_limited reason, got %#v", records[0])
+	}
+}
+
 func TestRefreshOnDemandRespectsMinInterval(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("ACCOUNT_STORAGE", "local")

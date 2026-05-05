@@ -13,6 +13,15 @@ type stubRepository struct {
 	patches  []Patch
 }
 
+type boolConfig map[string]bool
+
+func (c boolConfig) GetBool(path string, fallback bool) bool {
+	if value, ok := c[path]; ok {
+		return value
+	}
+	return fallback
+}
+
 func (s *stubRepository) Initialize(context.Context) error           { return nil }
 func (s *stubRepository) GetRevision(context.Context) (int64, error) { return 1, nil }
 func (s *stubRepository) RuntimeSnapshot(context.Context) ([]Record, int64, error) {
@@ -167,5 +176,47 @@ func TestRuntimeReserveResetsExpiredBasicWindowInline(t *testing.T) {
 	}
 	if lease.Token != "token-basic" {
 		t.Fatalf("expected token-basic, got %q", lease.Token)
+	}
+}
+
+func TestRuntimeReserveCanIgnoreLocalQuota(t *testing.T) {
+	repo := &stubRepository{
+		snapshot: []Record{
+			{
+				Token:     "token-empty",
+				Pool:      "basic",
+				Status:    StatusActive,
+				LastUseAt: 1,
+				Quota:     DefaultQuotaSet("basic"),
+			},
+		},
+	}
+	repo.snapshot[0].Quota.Fast.Remaining = 0
+
+	runtime := NewRuntime(repo, boolConfig{"account.selection.ignore_quota": true})
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+
+	spec, ok := model.Get("grok-4.20-fast")
+	if !ok {
+		t.Fatal("model not found")
+	}
+	lease, err := runtime.Reserve(spec)
+	if err != nil {
+		t.Fatalf("reserve should ignore local quota: %v", err)
+	}
+	if lease.Token != "token-empty" {
+		t.Fatalf("expected token-empty, got %q", lease.Token)
+	}
+
+	if err := runtime.ApplyFeedback(context.Background(), lease, Feedback{Kind: FeedbackRateLimited, Reason: "upstream 429"}); err != nil {
+		t.Fatalf("apply rate-limit feedback: %v", err)
+	}
+	if len(repo.patches) != 1 {
+		t.Fatalf("expected 1 patch, got %d", len(repo.patches))
+	}
+	if repo.patches[0].Status == nil || *repo.patches[0].Status != StatusCooling {
+		t.Fatalf("expected cooling patch after upstream 429, got %#v", repo.patches[0].Status)
 	}
 }

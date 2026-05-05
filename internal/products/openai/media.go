@@ -557,10 +557,6 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 			}
 			return nil, err
 		}
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
-		if meta == nil || !meta.SawRateLimit {
-			syncUsedQuotaAsync(state, lease.Token, lease.Mode)
-		}
 		outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 		if err != nil {
 			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
@@ -585,7 +581,15 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 					contentParts = append(contentParts, output.B64JSON)
 				}
 			}
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
+			if meta == nil || !meta.SawRateLimit {
+				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
+			}
 			return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil, nil), nil
+		}
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, imageFeedback(meta))
+		if meta == nil || !meta.SawRateLimit {
+			syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		}
 		return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 	}
@@ -620,8 +624,6 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 		return nil, err
 	}
-	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
-	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 	if err != nil {
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
@@ -646,8 +648,12 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 				contentParts = append(contentParts, output.B64JSON)
 			}
 		}
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), "", nil, nil), nil
 	}
+	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
 }
 

@@ -120,6 +120,10 @@ heavy_interval_sec = 7200    # heavy 号池刷新周期（秒），默认 2 h
 usage_concurrency = 50
 on_demand_min_interval_sec = 300
 
+[account.selection]
+# 账号选择时是否忽略本地额度。开启后只看账号状态，直到上游真实返回 429 再标记限流。
+ignore_quota = false
+
 
 # ==================== 对话配置 ====================
 [chat]

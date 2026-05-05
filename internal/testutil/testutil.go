@@ -70,6 +70,7 @@ type FakeGrokServer struct {
 	WebsocketImageMode  string
 	ImageEditMode       string
 	ImageDownloadMode   string
+	RateLimitMode       string
 	AppChatImageModes   map[string]string
 	WebsocketImageModes map[string]string
 	RateLimitCalls      map[string]int
@@ -295,7 +296,12 @@ func (f *FakeGrokServer) handleRateLimits(w http.ResponseWriter, r *http.Request
 	key := token + "|" + modelName
 	f.mu.Lock()
 	f.RateLimitCalls[key]++
+	rateLimitMode := f.RateLimitMode
 	f.mu.Unlock()
+	if strings.EqualFold(rateLimitMode, "rate_limit") {
+		http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
 	total := 20
 	switch modelName {
 	case "fast":

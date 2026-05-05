@@ -52,7 +52,7 @@ func main() {
 		panic(err)
 	}
 	config.LogLoaded(cfg)
-	runtime := account.NewRuntime(repo)
+	runtime := account.NewRuntime(repo, cfg)
 	if err := runtime.Sync(context.Background()); err != nil {
 		logger.Error("runtime bootstrap failed", "error", err)
 		panic(err)
