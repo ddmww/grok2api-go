@@ -14,6 +14,7 @@
     "account": "账户管理",
     "config": "配置管理",
     "cache": "缓存管理",
+    "logs": "日志管理",
     "languageLabel": "语言",
     "logout": "退出登录",
     "versionDialogTitle": "版本信息",
@@ -474,6 +475,43 @@
           "desc": "按天轮转时最多保留的日志文件数量。默认 7。"
         }
       }
+    }
+  },
+  "logs": {
+    "pageTitle": "Grok2API - 日志管理",
+    "pageHeading": "日志管理",
+    "pageSubtitle": "实时查看对话、生图和错误摘要日志。",
+    "live": "实时连接中",
+    "reconnecting": "连接重试中",
+    "paused": "已暂停",
+    "allCategories": "全部分类",
+    "allLevels": "全部级别",
+    "searchPlaceholder": "搜索模型、路径、SSO、错误摘要",
+    "pause": "暂停",
+    "resume": "继续",
+    "clear": "清空",
+    "clearConfirm": "清空当前内存日志？",
+    "empty": "暂无日志",
+    "loadFailed": "日志加载失败：{message}",
+    "colTime": "时间",
+    "colCategory": "分类",
+    "colLevel": "级别",
+    "colStatus": "状态码",
+    "colPath": "路径",
+    "colDuration": "耗时",
+    "colSSO": "SSO",
+    "colModel": "模型",
+    "colMessage": "消息",
+    "category": {
+      "chat": "对话调用",
+      "image": "生图调用",
+      "error": "错误日志",
+      "system": "系统日志"
+    },
+    "level": {
+      "info": "信息",
+      "warn": "警告",
+      "error": "错误"
     }
   },
   "cache": {

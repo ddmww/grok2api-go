@@ -18,6 +18,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/model"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
+	"github.com/ddmww/grok2api-go/internal/platform/logstream"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/upstreamblocker"
 	"github.com/gin-gonic/gin"
@@ -789,6 +790,7 @@ func consumeChatStream(lines <-chan string, adapter *xai.StreamAdapter, onEvent 
 }
 
 func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []map[string]any, tools []map[string]any, toolChoice any) (streamResult, error) {
+	reqLog := newRequestLog(state, logstream.CategoryChat, "/v1/chat/completions", spec)
 	timeoutSec := state.Config.GetInt("chat.timeout", 60)
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
@@ -810,32 +812,42 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		lease, err := reserveLease(state, spec, excluded)
 		if err != nil {
 			if lastRetryErr != nil {
+				reqLog.failure(lastRetryErr, "chat completion failed")
 				return streamResult{}, lastRetryErr
 			}
+			reqLog.failure(err, "chat completion failed")
 			return streamResult{}, err
 		}
+		reqLog.setLease(lease)
 
 		lines, errCh := session.ChatStream(ctx, lease.Token, buildReversePayload(state, spec, message))
 		adapter := xai.NewStreamAdapter(state.Config)
 		result, _ := consumeChatStream(lines, adapter, nil)
 
 		if err := <-errCh; err != nil {
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			feedback := feedbackForError(err)
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
+			if feedback.Kind == account.FeedbackRateLimited {
+				reqLog.rateLimited(feedback.Reason)
+			}
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				lastRetryErr = err
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
+			reqLog.failure(err, "chat completion failed")
 			return streamResult{}, err
 		}
 		if !result.completed {
 			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			feedback := feedbackForError(err)
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				lastRetryErr = err
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
+			reqLog.failure(err, "chat stream ended before final metadata")
 			return streamResult{}, err
 		}
 
@@ -852,21 +864,25 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		if strings.TrimSpace(result.content) == "" && len(result.toolCalls) == 0 {
 			if errorMessage := adapter.FinalError(); errorMessage != "" {
 				err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: errorMessage}
-				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+				feedback := feedbackForError(err)
+				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
 				if shouldRetry(err, retryCodes, attempt, maxRetries) {
 					lastRetryErr = err
 					excluded[lease.Token] = struct{}{}
 					continue
 				}
+				reqLog.failure(err, "chat completion returned no content")
 				return streamResult{}, err
 			}
 		}
 		result.searchSources = adapter.SearchSourcesList()
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
+		reqLog.success("chat completion succeeded")
 		return result, nil
 	}
 
+	reqLog.failure(fmt.Errorf("no available accounts for this model tier"), "chat completion failed")
 	return streamResult{}, fmt.Errorf("no available accounts for this model tier")
 }
 
@@ -1098,6 +1114,7 @@ func parseResponsesInput(input any) []map[string]any {
 }
 
 func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatRequest) {
+	reqLog := newRequestLog(state, logstream.CategoryChat, "/v1/chat/completions", spec)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -1109,6 +1126,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 	thinkingEnabled := state.Config.GetBool("features.thinking", true)
 	session, err := state.XAI.NewChatSession()
 	if err != nil {
+		reqLog.failure(err, "stream chat failed")
 		writeOpenAIError(c, err)
 		return
 	}
@@ -1117,9 +1135,11 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		lease, err := reserveLease(state, spec, excluded)
 		if err != nil {
+			reqLog.failure(err, "stream chat failed")
 			writeOpenAIError(c, err)
 			return
 		}
+		reqLog.setLease(lease)
 
 		lines, errCh := session.ChatStream(c.Request.Context(), lease.Token, buildReversePayload(state, spec, message))
 		adapter := xai.NewStreamAdapter(state.Config)
@@ -1201,30 +1221,39 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		}
 
 		if err := <-errCh; err != nil {
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			feedback := feedbackForError(err)
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
+			if feedback.Kind == account.FeedbackRateLimited {
+				reqLog.rateLimited(feedback.Reason)
+			}
 			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
 			if !outputStarted {
+				reqLog.failure(err, "stream chat failed")
 				writeOpenAIError(c, err)
 				return
 			}
+			reqLog.failure(err, "stream chat failed after output started")
 			_ = writeSSEData(c, map[string]any{"error": map[string]any{"message": err.Error(), "type": "server_error", "code": "upstream_stream_error"}})
 			_ = writeSSEDone(c)
 			return
 		}
 		if !result.completed {
 			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
+			feedback := feedbackForError(err)
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
 			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				continue
 			}
 			if !outputStarted {
+				reqLog.failure(err, "stream chat ended before final metadata")
 				writeOpenAIError(c, err)
 				return
 			}
+			reqLog.failure(err, "stream chat ended before final metadata")
 			_ = writeSSEData(c, map[string]any{"error": map[string]any{"message": "上游流式响应未正常结束", "type": "server_error", "code": "upstream_stream_incomplete"}})
 			_ = writeSSEDone(c)
 			return
@@ -1277,6 +1306,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 				}
 				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
+				reqLog.success("stream chat succeeded")
 				payload := map[string]any{
 					"id":      id,
 					"object":  "chat.completion.chunk",
@@ -1318,6 +1348,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 
 		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
 		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
+		reqLog.success("stream chat succeeded")
 		finalChunk := map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",

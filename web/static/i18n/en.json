@@ -14,6 +14,7 @@
     "account": "Account Management",
     "config": "Configuration Management",
     "cache": "Cache Management",
+    "logs": "Logs",
     "languageLabel": "Language",
     "logout": "Sign Out",
     "versionDialogTitle": "Version",
@@ -474,6 +475,43 @@
           "desc": "Maximum number of daily log files to keep during rotation. Default: 7."
         }
       }
+    }
+  },
+  "logs": {
+    "pageTitle": "Grok2API - Logs",
+    "pageHeading": "Logs",
+    "pageSubtitle": "Watch real-time chat, image, and error summary logs.",
+    "live": "Live",
+    "reconnecting": "Reconnecting",
+    "paused": "Paused",
+    "allCategories": "All categories",
+    "allLevels": "All levels",
+    "searchPlaceholder": "Search model, path, SSO, or error summary",
+    "pause": "Pause",
+    "resume": "Resume",
+    "clear": "Clear",
+    "clearConfirm": "Clear current in-memory logs?",
+    "empty": "No logs yet",
+    "loadFailed": "Failed to load logs: {message}",
+    "colTime": "Time",
+    "colCategory": "Category",
+    "colLevel": "Level",
+    "colStatus": "Status",
+    "colPath": "Path",
+    "colDuration": "Duration",
+    "colSSO": "SSO",
+    "colModel": "Model",
+    "colMessage": "Message",
+    "category": {
+      "chat": "Chat",
+      "image": "Image",
+      "error": "Error",
+      "system": "System"
+    },
+    "level": {
+      "info": "Info",
+      "warn": "Warn",
+      "error": "Error"
     }
   },
   "cache": {

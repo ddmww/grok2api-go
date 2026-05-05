@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="logs.pageTitle">Grok2API - 日志管理</title>
+  <link rel="icon" href="/favicon.ico?v={{APP_VERSION}}">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="/static/css/app.css?v={{APP_VERSION}}" rel="stylesheet">
+  <style>
+    body { background:#FAF9F5 }
+    .page-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+    .page-title{font-size:22px;font-weight:700;line-height:1.2}
+    .page-sub{font-size:13px;color:var(--fg-muted);margin-top:5px}
+    .log-toolbar{display:grid;grid-template-columns:170px 150px minmax(180px,1fr) auto auto;gap:8px;align-items:center;margin-bottom:12px}
+    .log-shell{background:#fff;border-radius:14px;overflow:hidden}
+    .log-head,.log-row{display:grid;grid-template-columns:178px 88px 78px 86px minmax(120px,1fr) 96px 92px 120px minmax(180px,1.3fr);gap:10px;align-items:center}
+    .log-head{padding:11px 14px;color:#999;font-size:11px;font-weight:600;text-transform:uppercase;border-bottom:1px solid #f1f1f1}
+    .log-list{height:calc(100vh - 216px);min-height:360px;overflow:auto}
+    .log-row{padding:11px 14px;font-size:12px;color:#3f3f3f;border-bottom:1px solid #f7f7f7}
+    .log-row:hover{background:#fdfdfd}
+    .log-row.is-error{background:#fffafa}
+    .log-row.is-error:hover{background:#fff6f6}
+    .log-mono{font-family:'Geist Mono','Courier New',monospace;font-size:11px;word-break:break-all}
+    .log-message{font-weight:600;color:#242424}
+    .log-error{color:#a94442;word-break:break-word}
+    .log-empty{padding:54px 16px;text-align:center;color:#aaa;font-size:13px}
+    .badge-log{display:inline-flex;align-items:center;justify-content:center;height:22px;padding:0 8px;border-radius:999px;font-size:11px;font-weight:600;width:max-content}
+    .badge-chat{background:#eef6ff;color:#2563eb}
+    .badge-image{background:#f0fdf4;color:#059669}
+    .badge-error{background:#fef2f2;color:#dc2626}
+    .badge-system{background:#f5f5f5;color:#525252}
+    .badge-level-info{background:#f5f5f5;color:#525252}
+    .badge-level-warn{background:#fff7ed;color:#ea580c}
+    .badge-level-error{background:#fef2f2;color:#dc2626}
+    .log-status{font-variant-numeric:tabular-nums}
+    .live-dot{width:7px;height:7px;border-radius:999px;background:#16a34a;display:inline-block}
+    .live-dot.paused{background:#a3a3a3}
+    .btn-danger-light{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+    @media (max-width: 980px){
+      .log-toolbar{grid-template-columns:1fr 1fr}
+      .log-toolbar .input:nth-child(3){grid-column:1 / -1}
+      .log-shell{overflow-x:auto}
+      .log-head,.log-row{min-width:1080px}
+      .page-hd{flex-direction:column}
+    }
+  </style>
+</head>
+<body>
+  <div id="admin-header"></div>
+  <main class="admin-main">
+    <div class="page-hd">
+      <div>
+        <h1 class="page-title" data-i18n="logs.pageHeading">日志管理</h1>
+        <p class="page-sub" data-i18n="logs.pageSubtitle">实时查看对话、生图和错误摘要日志。</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-muted">
+        <span id="live-dot" class="live-dot"></span>
+        <span id="live-state" data-i18n="logs.live">实时连接中</span>
+      </div>
+    </div>
+
+    <div class="log-toolbar">
+      <select id="category" class="input" aria-label="Category">
+        <option value="" data-i18n="logs.allCategories">全部分类</option>
+        <option value="chat" data-i18n="logs.category.chat">对话调用</option>
+        <option value="image" data-i18n="logs.category.image">生图调用</option>
+        <option value="error" data-i18n="logs.category.error">错误日志</option>
+        <option value="system" data-i18n="logs.category.system">系统日志</option>
+      </select>
+      <select id="level" class="input" aria-label="Level">
+        <option value="" data-i18n="logs.allLevels">全部级别</option>
+        <option value="info" data-i18n="logs.level.info">信息</option>
+        <option value="warn" data-i18n="logs.level.warn">警告</option>
+        <option value="error" data-i18n="logs.level.error">错误</option>
+      </select>
+      <input id="search" class="input" type="search" data-i18n-placeholder="logs.searchPlaceholder" placeholder="搜索模型、路径、SSO、错误摘要">
+      <button id="pause" type="button" class="btn btn-ghost" data-i18n="logs.pause">暂停</button>
+      <button id="clear" type="button" class="btn btn-danger-light" data-i18n="logs.clear">清空</button>
+    </div>
+
+    <section class="log-shell">
+      <div class="log-head">
+        <div data-i18n="logs.colTime">时间</div>
+        <div data-i18n="logs.colCategory">分类</div>
+        <div data-i18n="logs.colLevel">级别</div>
+        <div data-i18n="logs.colStatus">状态码</div>
+        <div data-i18n="logs.colPath">路径</div>
+        <div data-i18n="logs.colDuration">耗时</div>
+        <div data-i18n="logs.colSSO">SSO</div>
+        <div data-i18n="logs.colModel">模型</div>
+        <div data-i18n="logs.colMessage">消息</div>
+      </div>
+      <div id="log-list" class="log-list"></div>
+    </section>
+  </main>
+  <script src="/static/js/i18n.js?v={{APP_VERSION}}"></script>
+  <script src="/static/js/auth.js?v={{APP_VERSION}}"></script>
+  <script src="/static/js/toast.js?v={{APP_VERSION}}"></script>
+  <script src="/static/js/admin-header.js?v={{APP_VERSION}}"></script>
+  <script src="/static/js/footer.js?v={{APP_VERSION}}"></script>
+  <script>
+    function waitI18n() {
+      return new Promise((resolve) => {
+        if (window.I18n?.onReady) I18n.onReady(resolve);
+        else resolve();
+      });
+    }
+
+    (async () => {
+      await window.renderAdminHeader?.();
+      await waitI18n();
+      const key = await adminKey.get();
+      if (!key || !await verifyKey(ADMIN_API + '/verify', key).catch(() => false)) {
+        location.href = '/admin/login';
+        return;
+      }
+      window.I18n?.apply?.();
+
+      const state = { items: [], paused: false, stream: null };
+      const list = document.getElementById('log-list');
+      const category = document.getElementById('category');
+      const level = document.getElementById('level');
+      const search = document.getElementById('search');
+      const pause = document.getElementById('pause');
+      const clear = document.getElementById('clear');
+      const liveDot = document.getElementById('live-dot');
+      const liveState = document.getElementById('live-state');
+      const labels = {
+        category: { chat: 'logs.category.chat', image: 'logs.category.image', error: 'logs.category.error', system: 'logs.category.system' },
+        level: { info: 'logs.level.info', warn: 'logs.level.warn', error: 'logs.level.error' },
+      };
+
+      const tr = (key, fallback, params) => {
+        if (typeof window.t !== 'function') return fallback;
+        const value = t(key, params);
+        return value === key ? fallback : value;
+      };
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[ch]));
+      const formatTime = (value) => {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString();
+      };
+      const query = () => {
+        const params = new URLSearchParams({ limit: '300' });
+        if (category.value) params.set('category', category.value);
+        if (level.value) params.set('level', level.value);
+        return params;
+      };
+      const adminHeaders = async (json = false) => {
+        const currentKey = await adminKey.get();
+        return { ...(json ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${currentKey}` };
+      };
+      const visibleItems = () => {
+        const needle = search.value.trim().toLowerCase();
+        if (!needle) return state.items;
+        return state.items.filter((item) => [
+          item.path, item.model, item.sso, item.message, item.error_summary, String(item.status_code || ''),
+        ].some((value) => String(value || '').toLowerCase().includes(needle)));
+      };
+      const render = () => {
+        const items = visibleItems().slice(0, 300);
+        if (!items.length) {
+          list.innerHTML = `<div class="log-empty">${escapeHtml(tr('logs.empty', '暂无日志'))}</div>`;
+          return;
+        }
+        list.innerHTML = items.map((item) => {
+          const cat = item.category || 'system';
+          const lvl = item.level || 'info';
+          const message = [item.message, item.error_summary].filter(Boolean).join(' · ');
+          return `
+            <div class="log-row ${lvl === 'error' || cat === 'error' ? 'is-error' : ''}">
+              <div class="log-mono">${escapeHtml(formatTime(item.time))}</div>
+              <div><span class="badge-log badge-${escapeHtml(cat)}">${escapeHtml(tr(labels.category[cat], cat))}</span></div>
+              <div><span class="badge-log badge-level-${escapeHtml(lvl)}">${escapeHtml(tr(labels.level[lvl], lvl))}</span></div>
+              <div class="log-status">${escapeHtml(item.status_code || '-')}</div>
+              <div class="log-mono">${escapeHtml(item.path || '-')}</div>
+              <div>${escapeHtml(item.duration_ms ? `${item.duration_ms} ms` : '-')}</div>
+              <div class="log-mono">${escapeHtml(item.sso || '-')}</div>
+              <div class="log-mono">${escapeHtml(item.model || '-')}</div>
+              <div class="${item.error_summary ? 'log-error' : 'log-message'}">${escapeHtml(message || '-')}</div>
+            </div>
+          `;
+        }).join('');
+      };
+      const setLive = (text, paused) => {
+        liveState.textContent = text;
+        liveDot.classList.toggle('paused', paused);
+      };
+      const load = async () => {
+        const res = await fetch(`/admin/api/logs?${query()}`, { headers: await adminHeaders(), cache: 'no-store' });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        state.items = Array.isArray(data.items) ? data.items : [];
+        render();
+      };
+      const connect = () => {
+        if (state.stream) state.stream.close();
+        const params = query();
+        if (key) params.set('app_key', key);
+        state.stream = new EventSource(`/admin/api/logs/stream?${params}`);
+        setLive(tr('logs.live', '实时连接中'), false);
+        state.stream.addEventListener('log', (event) => {
+          if (state.paused) return;
+          const item = JSON.parse(event.data);
+          state.items.unshift(item);
+          state.items = state.items.slice(0, 300);
+          render();
+        });
+        state.stream.onerror = () => setLive(tr('logs.reconnecting', '连接重试中'), true);
+      };
+      const reload = async () => {
+        await load();
+        connect();
+      };
+
+      category.addEventListener('change', reload);
+      level.addEventListener('change', reload);
+      search.addEventListener('input', render);
+      pause.addEventListener('click', () => {
+        state.paused = !state.paused;
+        pause.textContent = state.paused ? tr('logs.resume', '继续') : tr('logs.pause', '暂停');
+        setLive(state.paused ? tr('logs.paused', '已暂停') : tr('logs.live', '实时连接中'), state.paused);
+      });
+      clear.addEventListener('click', async () => {
+        if (!confirm(tr('logs.clearConfirm', '清空当前内存日志？'))) return;
+        const res = await fetch('/admin/api/logs/clear', { method: 'POST', headers: await adminHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        state.items = [];
+        render();
+      });
+      window.addEventListener('beforeunload', () => state.stream?.close());
+      try {
+        await reload();
+      } catch (err) {
+        showToast?.(tr('logs.loadFailed', '日志加载失败：{message}', { message: err.message }), 'error');
+      }
+    })();
+  </script>
+  <script>window.renderSiteFooter?.();</script>
+</body>
+</html>

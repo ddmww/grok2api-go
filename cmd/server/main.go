@@ -16,6 +16,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
 	"github.com/ddmww/grok2api-go/internal/platform/config"
 	"github.com/ddmww/grok2api-go/internal/platform/logging"
+	"github.com/ddmww/grok2api-go/internal/platform/logstream"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
 	"github.com/ddmww/grok2api-go/internal/products/admin"
@@ -75,7 +76,14 @@ func main() {
 		ProxyClearance: clearanceScheduler,
 		XAI:            xaiClient,
 		Tasks:          tasks.NewStore(),
+		Logs:           logstream.NewStore(logstream.DefaultCapacity),
 	}
+	state.Logs.Add(logstream.Event{
+		Category:   logstream.CategorySystem,
+		Level:      logstream.LevelInfo,
+		Message:    "server initialized",
+		StatusCode: http.StatusOK,
+	})
 
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -101,8 +109,20 @@ func main() {
 
 	go func() {
 		logger.Info("server starting", "addr", server.Addr, "storage", repo.StorageType(), "runtime_size", runtime.Size())
+		state.Logs.Add(logstream.Event{
+			Category: logstream.CategorySystem,
+			Level:    logstream.LevelInfo,
+			Message:  "server starting",
+			Path:     server.Addr,
+		})
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server exited", "error", err)
+			state.Logs.Add(logstream.Event{
+				Category:     logstream.CategorySystem,
+				Level:        logstream.LevelError,
+				Message:      "server exited",
+				ErrorSummary: err.Error(),
+			})
 		}
 	}()
 

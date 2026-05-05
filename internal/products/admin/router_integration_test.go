@@ -140,6 +140,18 @@ func TestAdminRoutes(t *testing.T) {
 		t.Fatalf("status route failed: %d %s", resp.Code, resp.Body.String())
 	}
 
+	resp = doJSON(http.MethodGet, "/admin/api/logs", nil)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"items"`) {
+		t.Fatalf("logs route failed: %d %s", resp.Code, resp.Body.String())
+	}
+
+	unauthResp := httptest.NewRecorder()
+	unauthReq := httptest.NewRequest(http.MethodGet, "/admin/api/logs", nil)
+	router.ServeHTTP(unauthResp, unauthReq)
+	if unauthResp.Code != http.StatusUnauthorized {
+		t.Fatalf("logs route without auth status = %d, want %d", unauthResp.Code, http.StatusUnauthorized)
+	}
+
 	metaResp := httptest.NewRecorder()
 	metaReq := httptest.NewRequest(http.MethodGet, "/meta/update?force=true", nil)
 	router.ServeHTTP(metaResp, metaReq)

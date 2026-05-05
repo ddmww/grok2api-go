@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/platform/auth"
 	platformbatch "github.com/ddmww/grok2api-go/internal/platform/batch"
 	"github.com/ddmww/grok2api-go/internal/platform/logging"
+	"github.com/ddmww/grok2api-go/internal/platform/logstream"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
 	"github.com/ddmww/grok2api-go/internal/platform/updatecheck"
@@ -58,6 +60,9 @@ const tokenImportBatchSize = 1000
 
 func Mount(router *gin.Engine, state *app.State) {
 	updater := newUpdateService()
+	if state.Logs == nil {
+		state.Logs = logstream.NewStore(logstream.DefaultCapacity)
+	}
 	router.StaticFS("/static", http.Dir(paths.StaticDir()))
 	router.StaticFile("/favicon.ico", filepath.Join(paths.StaticDir(), "favicon.ico"))
 
@@ -79,6 +84,7 @@ func Mount(router *gin.Engine, state *app.State) {
 	router.GET("/admin/account", serveHTML("admin/account.html"))
 	router.GET("/admin/config", serveHTML("admin/config.html"))
 	router.GET("/admin/cache", serveHTML("admin/cache.html"))
+	router.GET("/admin/logs", serveHTML("admin/logs.html"))
 
 	api := router.Group("/admin/api")
 	api.Use(auth.AdminKey(state.Config))
@@ -106,12 +112,29 @@ func Mount(router *gin.Engine, state *app.State) {
 				state.Config.GetString("logging.file_level", ""),
 				state.Config.GetInt("logging.max_files", 7) > 0,
 			)
+			state.Logs.Add(logstream.Event{
+				Category:   logstream.CategorySystem,
+				Level:      logstream.LevelInfo,
+				Path:       "/admin/api/config",
+				StatusCode: http.StatusOK,
+				Message:    "configuration updated",
+			})
 			state.Proxy.ResetAll()
 			c.JSON(http.StatusOK, gin.H{"status": "success", "message": "配置已更新"})
 		})
 		api.GET("/storage", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"type": state.Repo.StorageType()}) })
 		api.GET("/status", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"status": "ok", "size": state.Runtime.Size(), "revision": state.Runtime.Revision()})
+		})
+		api.GET("/logs", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"items": state.Logs.List(parseLogQuery(c))})
+		})
+		api.GET("/logs/stream", func(c *gin.Context) {
+			streamLogEvents(c, state.Logs, parseLogQuery(c))
+		})
+		api.POST("/logs/clear", func(c *gin.Context) {
+			state.Logs.Clear()
+			c.JSON(http.StatusOK, gin.H{"status": "success"})
 		})
 		api.POST("/sync", func(c *gin.Context) {
 			if err := state.Runtime.Sync(c.Request.Context()); err != nil {
@@ -616,6 +639,52 @@ func serveHTML(path string) gin.HandlerFunc {
 		}
 		rendered := strings.ReplaceAll(string(body), "{{APP_VERSION}}", version.Current)
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(rendered))
+	}
+}
+
+func parseLogQuery(c *gin.Context) logstream.Query {
+	limit := 200
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			limit = value
+		}
+	}
+	return logstream.Query{
+		Category: logstream.NormalizeCategory(c.Query("category")),
+		Level:    logstream.NormalizeLevel(c.Query("level")),
+		Limit:    limit,
+	}
+}
+
+func streamLogEvents(c *gin.Context, store *logstream.Store, query logstream.Query) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	events, cancel := store.Subscribe(query)
+	defer cancel()
+	_, _ = c.Writer.Write([]byte(": connected\n\n"))
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			if _, err := c.Writer.Write([]byte("event: log\n" + "data: " + string(data) + "\n\n")); err != nil {
+				return
+			}
+			if flusher, ok := c.Writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/ddmww/grok2api-go/internal/control/proxy"
 	"github.com/ddmww/grok2api-go/internal/control/refresh"
 	"github.com/ddmww/grok2api-go/internal/dataplane/xai"
+	"github.com/ddmww/grok2api-go/internal/platform/logstream"
 	"github.com/ddmww/grok2api-go/internal/platform/paths"
 	"github.com/ddmww/grok2api-go/internal/platform/tasks"
 	"github.com/ddmww/grok2api-go/internal/testutil"
@@ -87,6 +88,7 @@ func TestOpenAIRoutes(t *testing.T) {
 		Proxy:   proxyRuntime,
 		XAI:     xaiClient,
 		Tasks:   tasks.NewStore(),
+		Logs:    logstream.NewStore(logstream.DefaultCapacity),
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -180,6 +182,10 @@ func TestOpenAIRoutes(t *testing.T) {
 		}
 		if !strings.Contains(resp.Body.String(), "Hello from fake grok") {
 			t.Fatalf("chat body mismatch: %s", resp.Body.String())
+		}
+		logs := state.Logs.List(logstream.Query{Category: logstream.CategoryChat, Limit: 10})
+		if len(logs) == 0 || logs[0].Model != "grok-4.20-fast" || logs[0].StatusCode != http.StatusOK {
+			t.Fatalf("expected successful chat log, got %#v", logs)
 		}
 	})
 
@@ -573,6 +579,17 @@ func TestOpenAIRoutes(t *testing.T) {
 		}
 		if records[0].Status != account.StatusCooling {
 			t.Fatalf("expected token cooling after 429 fallback, got: %#v", records[0])
+		}
+		logs := state.Logs.List(logstream.Query{Category: logstream.CategoryError, Level: logstream.LevelError, Limit: 20})
+		found := false
+		for _, event := range logs {
+			if event.StatusCode == http.StatusTooManyRequests && event.SSO != "" && strings.Contains(event.Message, "rate limited") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected image 429 rate-limit log, got %#v", logs)
 		}
 	})
 
