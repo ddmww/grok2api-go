@@ -82,6 +82,135 @@ func TestRefreshTokensRecoversCoolingAndWritesDetailedQuota(t *testing.T) {
 	}
 }
 
+func TestRefreshOnDemandSkipsCoolingWhenQuotaIgnored(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ACCOUNT_STORAGE", "local")
+	t.Setenv("DATA_DIR", dataDir)
+	t.Setenv("ACCOUNT_LOCAL_PATH", filepath.Join(dataDir, "accounts.db"))
+	if err := paths.EnsureRuntimeDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+
+	repo, err := account.NewRepositoryFromEnv()
+	if err != nil {
+		t.Fatalf("new repo: %v", err)
+	}
+	defer repo.Close()
+	if err := repo.Initialize(context.Background()); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	if _, err := repo.UpsertAccounts(context.Background(), []account.Upsert{{Token: "token-1", Pool: "basic"}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	cooldownUntil := account.NowMS() + 3600_000
+	if _, err := repo.PatchAccounts(context.Background(), []account.Patch{{
+		Token:       "token-1",
+		Status:      func() *account.Status { status := account.StatusCooling; return &status }(),
+		StateReason: func() *string { reason := "rate_limited"; return &reason }(),
+		ExtMerge:    map[string]any{"cooldown_until": cooldownUntil},
+	}}); err != nil {
+		t.Fatalf("patch cooling: %v", err)
+	}
+
+	fake := testutil.NewFakeGrokServer()
+	defer fake.Close()
+	cfg := testutil.NewConfig(map[string]any{
+		"proxy": map[string]any{
+			"egress":   map[string]any{"mode": "direct"},
+			"upstream": map[string]any{"base_url": fake.BaseURL()},
+		},
+		"account": map[string]any{
+			"selection": map[string]any{"ignore_quota": true},
+			"refresh":   map[string]any{"usage_concurrency": 4},
+		},
+	})
+	runtime := account.NewRuntime(repo, cfg)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+	service := New(repo, runtime, cfg, xai.NewClient(cfg, proxy.NewRuntime(cfg)))
+
+	result, err := service.RefreshOnDemand(context.Background())
+	if err != nil {
+		t.Fatalf("refresh on demand: %v", err)
+	}
+	if result.Checked != 0 || result.Refreshed != 0 || result.Recovered != 0 {
+		t.Fatalf("expected protected cooling account to be skipped, got %#v", result)
+	}
+	if got := fake.RateLimitCallCount("token-1", "auto"); got != 0 {
+		t.Fatalf("expected no quota probe for protected cooling account, got %d", got)
+	}
+
+	records, err := repo.GetAccounts(context.Background(), []string{"token-1"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("get record: %v %#v", err, records)
+	}
+	if records[0].Status != account.StatusCooling {
+		t.Fatalf("expected account to remain cooling, got %#v", records[0])
+	}
+}
+
+func TestRefreshCallDoesNotRecoverCoolingWhenQuotaIgnored(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ACCOUNT_STORAGE", "local")
+	t.Setenv("DATA_DIR", dataDir)
+	t.Setenv("ACCOUNT_LOCAL_PATH", filepath.Join(dataDir, "accounts.db"))
+	if err := paths.EnsureRuntimeDirs(); err != nil {
+		t.Fatalf("ensure dirs: %v", err)
+	}
+
+	repo, err := account.NewRepositoryFromEnv()
+	if err != nil {
+		t.Fatalf("new repo: %v", err)
+	}
+	defer repo.Close()
+	if err := repo.Initialize(context.Background()); err != nil {
+		t.Fatalf("init repo: %v", err)
+	}
+	if _, err := repo.UpsertAccounts(context.Background(), []account.Upsert{{Token: "token-1", Pool: "basic"}}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if _, err := repo.PatchAccounts(context.Background(), []account.Patch{{
+		Token:       "token-1",
+		Status:      func() *account.Status { status := account.StatusCooling; return &status }(),
+		StateReason: func() *string { reason := "rate_limited"; return &reason }(),
+		ExtMerge:    map[string]any{"cooldown_until": account.NowMS() + 3600_000},
+	}}); err != nil {
+		t.Fatalf("patch cooling: %v", err)
+	}
+
+	fake := testutil.NewFakeGrokServer()
+	defer fake.Close()
+	cfg := testutil.NewConfig(map[string]any{
+		"proxy": map[string]any{
+			"egress":   map[string]any{"mode": "direct"},
+			"upstream": map[string]any{"base_url": fake.BaseURL()},
+		},
+		"account": map[string]any{
+			"selection": map[string]any{"ignore_quota": true},
+		},
+	})
+	runtime := account.NewRuntime(repo, cfg)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+	service := New(repo, runtime, cfg, xai.NewClient(cfg, proxy.NewRuntime(cfg)))
+
+	if err := service.RefreshCall(context.Background(), "token-1", "fast"); err != nil {
+		t.Fatalf("refresh call: %v", err)
+	}
+	if got := fake.RateLimitCallCount("token-1", "fast"); got != 0 {
+		t.Fatalf("expected no selected-mode quota sync for protected cooling account, got %d", got)
+	}
+	records, err := repo.GetAccounts(context.Background(), []string{"token-1"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("get record: %v %#v", err, records)
+	}
+	if records[0].Status != account.StatusCooling {
+		t.Fatalf("expected account to remain cooling, got %#v", records[0])
+	}
+}
+
 func TestRefreshTokensMarksCoolingOn429(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("ACCOUNT_STORAGE", "local")

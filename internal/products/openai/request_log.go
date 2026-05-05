@@ -97,6 +97,28 @@ func (l requestLog) rateLimited(reason string) {
 	})
 }
 
+func (l requestLog) applyFeedback(lease *account.Lease, feedback account.Feedback) {
+	if l.state == nil || l.state.Runtime == nil {
+		return
+	}
+	if err := l.state.Runtime.ApplyFeedback(context.Background(), lease, feedback); err != nil {
+		l.add(logstream.Event{
+			Category:     logstream.CategoryError,
+			Level:        logstream.LevelError,
+			Path:         l.path,
+			Model:        l.model,
+			DurationMS:   time.Since(l.start).Milliseconds(),
+			SSO:          l.sso,
+			ErrorSummary: err.Error(),
+			Message:      "failed to persist sso feedback",
+		})
+		return
+	}
+	if feedback.Kind == account.FeedbackRateLimited {
+		l.rateLimited(feedback.Reason)
+	}
+}
+
 func (l requestLog) add(event logstream.Event) {
 	if l.state == nil || l.state.Logs == nil {
 		return

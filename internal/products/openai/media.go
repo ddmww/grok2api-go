@@ -555,10 +555,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 		})
 		if err != nil {
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-			if feedback.Kind == account.FeedbackRateLimited {
-				reqLog.rateLimited(feedback.Reason)
-			}
+			reqLog.applyFeedback(lease, feedback)
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				lastRetryErr = err
@@ -570,10 +567,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 		outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 		if err != nil {
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-			if feedback.Kind == account.FeedbackRateLimited {
-				reqLog.rateLimited(feedback.Reason)
-			}
+			reqLog.applyFeedback(lease, feedback)
 			reqLog.failure(err, "image output processing failed")
 			return nil, err
 		}
@@ -586,10 +580,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 				output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
 				if err != nil {
 					feedback := feedbackForError(err)
-					_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-					if feedback.Kind == account.FeedbackRateLimited {
-						reqLog.rateLimited(feedback.Reason)
-					}
+					reqLog.applyFeedback(lease, feedback)
 					reqLog.failure(err, "image output processing failed")
 					return nil, err
 				}
@@ -602,10 +593,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 				}
 			}
 			feedback := imageFeedback(meta)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-			if feedback.Kind == account.FeedbackRateLimited {
-				reqLog.rateLimited(feedback.Reason)
-			}
+			reqLog.applyFeedback(lease, feedback)
 			if meta == nil || !meta.SawRateLimit {
 				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 			}
@@ -613,10 +601,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 			return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), reasoning, nil, nil), nil
 		}
 		feedback := imageFeedback(meta)
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-		if feedback.Kind == account.FeedbackRateLimited {
-			reqLog.rateLimited(feedback.Reason)
-		}
+		reqLog.applyFeedback(lease, feedback)
 		if meta == nil || !meta.SawRateLimit {
 			syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		}
@@ -657,20 +642,14 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 	})
 	if err != nil {
 		feedback := feedbackForError(err)
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-		if feedback.Kind == account.FeedbackRateLimited {
-			reqLog.rateLimited(feedback.Reason)
-		}
+		reqLog.applyFeedback(lease, feedback)
 		reqLog.failure(err, "image edit failed")
 		return nil, err
 	}
 	outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 	if err != nil {
 		feedback := feedbackForError(err)
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-		if feedback.Kind == account.FeedbackRateLimited {
-			reqLog.rateLimited(feedback.Reason)
-		}
+		reqLog.applyFeedback(lease, feedback)
 		reqLog.failure(err, "image edit output processing failed")
 		return nil, err
 	}
@@ -683,10 +662,7 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 			output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
 			if err != nil {
 				feedback := feedbackForError(err)
-				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-				if feedback.Kind == account.FeedbackRateLimited {
-					reqLog.rateLimited(feedback.Reason)
-				}
+				reqLog.applyFeedback(lease, feedback)
 				reqLog.failure(err, "image edit output processing failed")
 				return nil, err
 			}
@@ -698,12 +674,12 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 				contentParts = append(contentParts, output.B64JSON)
 			}
 		}
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		reqLog.success("image edit succeeded")
 		return chatResponse(spec.Name, strings.Join(contentParts, "\n\n"), "", nil, nil), nil
 	}
-	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+	reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	reqLog.success("image edit succeeded")
 	return map[string]any{"created": time.Now().Unix(), "data": outputs}, nil
@@ -728,14 +704,11 @@ func createVideo(ctx context.Context, state *app.State, spec model.Spec, prompt 
 	})
 	if err != nil {
 		feedback := feedbackForError(err)
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-		if feedback.Kind == account.FeedbackRateLimited {
-			reqLog.rateLimited(feedback.Reason)
-		}
+		reqLog.applyFeedback(lease, feedback)
 		reqLog.failure(err, "video creation failed")
 		return nil, err
 	}
-	_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+	reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	job := &videoJob{
 		ID:        responseID("video"),

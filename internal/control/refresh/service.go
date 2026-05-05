@@ -121,7 +121,7 @@ func (s *Service) RefreshPool(ctx context.Context, pool string) (Result, error) 
 	interval := s.poolInterval(pool)
 	filtered := make([]account.Record, 0, len(records))
 	for _, record := range records {
-		if shouldScheduledRefresh(record, interval) {
+		if s.shouldScheduledRefresh(record, interval) {
 			filtered = append(filtered, record)
 		}
 	}
@@ -149,6 +149,9 @@ func (s *Service) RefreshCall(ctx context.Context, token, mode string) error {
 	}
 	record := records[0]
 	if record.IsDeleted() {
+		return nil
+	}
+	if s.protectCooling(record) {
 		return nil
 	}
 	if mode = strings.TrimSpace(mode); mode == "" {
@@ -216,6 +219,9 @@ func (s *Service) refreshManageable(ctx context.Context) (Result, error) {
 				continue
 			}
 			status := record.EffectiveStatus(account.NowMS())
+			if s.protectCooling(record) {
+				continue
+			}
 			if status == account.StatusActive || status == account.StatusCooling {
 				records = append(records, record)
 			}
@@ -399,7 +405,7 @@ func (s *Service) poolInterval(pool string) int64 {
 	}
 }
 
-func shouldScheduledRefresh(record account.Record, intervalMS int64) bool {
+func (s *Service) shouldScheduledRefresh(record account.Record, intervalMS int64) bool {
 	if record.IsDeleted() {
 		return false
 	}
@@ -407,6 +413,9 @@ func shouldScheduledRefresh(record account.Record, intervalMS int64) bool {
 		return false
 	}
 	if record.Status == account.StatusCooling {
+		if s.protectCooling(record) {
+			return false
+		}
 		return true
 	}
 	if intervalMS <= 0 {
@@ -416,6 +425,33 @@ func shouldScheduledRefresh(record account.Record, intervalMS int64) bool {
 		return true
 	}
 	return account.NowMS()-record.LastSyncAt >= intervalMS
+}
+
+func (s *Service) protectCooling(record account.Record) bool {
+	if s == nil || s.cfg == nil || !s.cfg.GetBool("account.selection.ignore_quota", false) {
+		return false
+	}
+	if record.Status != account.StatusCooling {
+		return false
+	}
+	until := cooldownUntil(record)
+	return until > account.NowMS()
+}
+
+func cooldownUntil(record account.Record) int64 {
+	if record.Ext == nil {
+		return 0
+	}
+	switch value := record.Ext["cooldown_until"].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
 }
 
 func isStatus(err error, status int) bool {

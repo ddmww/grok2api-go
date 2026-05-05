@@ -826,10 +826,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 
 		if err := <-errCh; err != nil {
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-			if feedback.Kind == account.FeedbackRateLimited {
-				reqLog.rateLimited(feedback.Reason)
-			}
+			reqLog.applyFeedback(lease, feedback)
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				lastRetryErr = err
 				excluded[lease.Token] = struct{}{}
@@ -841,7 +838,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 		if !result.completed {
 			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
+			reqLog.applyFeedback(lease, feedback)
 			if shouldRetry(err, retryCodes, attempt, maxRetries) {
 				lastRetryErr = err
 				excluded[lease.Token] = struct{}{}
@@ -865,7 +862,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			if errorMessage := adapter.FinalError(); errorMessage != "" {
 				err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: errorMessage}
 				feedback := feedbackForError(err)
-				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
+				reqLog.applyFeedback(lease, feedback)
 				if shouldRetry(err, retryCodes, attempt, maxRetries) {
 					lastRetryErr = err
 					excluded[lease.Token] = struct{}{}
@@ -876,7 +873,7 @@ func runChat(ctx context.Context, state *app.State, spec model.Spec, messages []
 			}
 		}
 		result.searchSources = adapter.SearchSourcesList()
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		reqLog.success("chat completion succeeded")
 		return result, nil
@@ -1222,10 +1219,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 
 		if err := <-errCh; err != nil {
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
-			if feedback.Kind == account.FeedbackRateLimited {
-				reqLog.rateLimited(feedback.Reason)
-			}
+			reqLog.applyFeedback(lease, feedback)
 			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				continue
@@ -1243,7 +1237,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		if !result.completed {
 			err := &xai.UpstreamError{Status: http.StatusServiceUnavailable, Body: "upstream stream ended before final metadata"}
 			feedback := feedbackForError(err)
-			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedback)
+			reqLog.applyFeedback(lease, feedback)
 			if streamRetryEnabled && !outputStarted && shouldRetry(err, retryCodes, attempt, maxRetries) {
 				excluded[lease.Token] = struct{}{}
 				continue
@@ -1304,7 +1298,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 						return
 					}
 				}
-				_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+				reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 				syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 				reqLog.success("stream chat succeeded")
 				payload := map[string]any{
@@ -1346,7 +1340,7 @@ func streamChat(c *gin.Context, state *app.State, spec model.Spec, request chatR
 		}
 		result.searchSources = adapter.SearchSourcesList()
 
-		_ = state.Runtime.ApplyFeedback(context.Background(), lease, account.Feedback{Kind: account.FeedbackSuccess})
+		reqLog.applyFeedback(lease, account.Feedback{Kind: account.FeedbackSuccess})
 		syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 		reqLog.success("stream chat succeeded")
 		finalChunk := map[string]any{
