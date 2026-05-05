@@ -220,3 +220,43 @@ func TestRuntimeReserveCanIgnoreLocalQuota(t *testing.T) {
 		t.Fatalf("expected cooling patch after upstream 429, got %#v", repo.patches[0].Status)
 	}
 }
+
+func TestRuntimeRateLimitedExtendsExpiredCooldown(t *testing.T) {
+	expiredResetAt := NowMS() - 1000
+	repo := &stubRepository{
+		snapshot: []Record{
+			{
+				Token:  "token-expired-reset",
+				Pool:   "basic",
+				Status: StatusActive,
+				Quota:  DefaultQuotaSet("basic"),
+			},
+		},
+	}
+	repo.snapshot[0].Quota.Fast.ResetAt = expiredResetAt
+
+	runtime := NewRuntime(repo)
+	if err := runtime.Sync(context.Background()); err != nil {
+		t.Fatalf("sync runtime: %v", err)
+	}
+
+	spec, ok := model.Get("grok-4.20-fast")
+	if !ok {
+		t.Fatal("model not found")
+	}
+	lease, err := runtime.Reserve(spec)
+	if err != nil {
+		t.Fatalf("reserve failed: %v", err)
+	}
+	before := NowMS()
+	if err := runtime.ApplyFeedback(context.Background(), lease, Feedback{Kind: FeedbackRateLimited, Reason: "upstream 429"}); err != nil {
+		t.Fatalf("apply rate-limit feedback: %v", err)
+	}
+	cooldownUntil, ok := repo.patches[0].ExtMerge["cooldown_until"].(int64)
+	if !ok {
+		t.Fatalf("expected int64 cooldown_until, got %#v", repo.patches[0].ExtMerge["cooldown_until"])
+	}
+	if cooldownUntil <= before {
+		t.Fatalf("expected future cooldown_until, got %d <= %d", cooldownUntil, before)
+	}
+}

@@ -255,7 +255,7 @@ func (r *Runtime) ApplyFeedback(ctx context.Context, lease *Lease, feedback Feed
 		win := record.Quota.Window(lease.Mode)
 		if win != nil {
 			win.Remaining = 0
-			if win.ResetAt == 0 {
+			if win.ResetAt <= now {
 				win.ResetAt = now + int64(win.WindowSeconds)*1000
 			}
 			quotaPatch[lease.Mode] = *win
