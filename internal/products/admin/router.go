@@ -917,6 +917,8 @@ func applyAssetErrorFeedback(ctx context.Context, state *app.State, token string
 		_ = state.Runtime.ApplyFeedback(ctx, lease, account.Feedback{Kind: account.FeedbackUnauthorized, Reason: err.Error()})
 	case http.StatusForbidden:
 		_ = state.Runtime.ApplyFeedback(ctx, lease, account.Feedback{Kind: account.FeedbackForbidden, Reason: err.Error()})
+	case http.StatusTooManyRequests:
+		_ = state.Runtime.ApplyFeedback(ctx, lease, account.Feedback{Kind: account.FeedbackRateLimited, Reason: err.Error()})
 	}
 }
 

@@ -576,6 +576,38 @@ func TestOpenAIRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("image generation download 429 marks cooling", func(t *testing.T) {
+		resetImageTestTokens(t)
+		fake.AppChatImageModes = map[string]string{}
+		fake.WebsocketImageModes = map[string]string{}
+		fake.AppChatImageMode = "final"
+		fake.WebsocketImageMode = "final"
+		fake.ImageDownloadMode = "rate_limit"
+		defer func() { fake.ImageDownloadMode = "" }()
+		body := map[string]any{
+			"model":           "grok-imagine-image-lite",
+			"prompt":          "generate image",
+			"n":               1,
+			"response_format": "b64_json",
+		}
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer test-api-key")
+		req.Header.Set("Content-Type", "application/json")
+		resp := testutil.NewCloseNotifyRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != http.StatusTooManyRequests {
+			t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+		}
+		records, err := repo.GetAccounts(context.Background(), []string{"token-1"})
+		if err != nil || len(records) != 1 {
+			t.Fatalf("get token after download rate limit failed: %v %#v", err, records)
+		}
+		if records[0].Status != account.StatusCooling {
+			t.Fatalf("expected token cooling after image download 429, got: %#v", records[0])
+		}
+	})
+
 	t.Run("image generation retries next token after same-token rate limit", func(t *testing.T) {
 		resetImageTestTokens(t)
 		fake.AppChatImageMode = "final"

@@ -69,6 +69,7 @@ type FakeGrokServer struct {
 	AppChatImageMode    string
 	WebsocketImageMode  string
 	ImageEditMode       string
+	ImageDownloadMode   string
 	AppChatImageModes   map[string]string
 	WebsocketImageModes map[string]string
 	RateLimitCalls      map[string]int
@@ -359,6 +360,10 @@ func (f *FakeGrokServer) handleMediaLink(w http.ResponseWriter, r *http.Request)
 }
 
 func (f *FakeGrokServer) handleImage(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(f.ImageDownloadMode, "rate_limit") {
+		http.Error(w, `{"error":"image download rate limit exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
 	w.Header().Set("Content-Type", "image/png")
 	_, _ = w.Write([]byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,

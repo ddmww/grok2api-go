@@ -563,6 +563,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 		}
 		outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 		if err != nil {
+			_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 			return nil, err
 		}
 		if cfg.N < len(outputs) {
@@ -573,6 +574,7 @@ func generateImages(ctx context.Context, state *app.State, spec model.Spec, prom
 			for _, item := range items {
 				output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
 				if err != nil {
+					_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 					return nil, err
 				}
 				if output.ChatValue != "" {
@@ -622,6 +624,7 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 	syncUsedQuotaAsync(state, lease.Token, lease.Mode)
 	outputs, err := imageOutputs(ctx, state, lease.Token, items, cfg.ResponseFormat)
 	if err != nil {
+		_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 		return nil, err
 	}
 	if cfg.N < len(outputs) {
@@ -632,6 +635,7 @@ func editImages(ctx context.Context, state *app.State, spec model.Spec, messages
 		for _, item := range items {
 			output, err := prepareImageOutput(ctx, state, lease.Token, item, cfg.ResponseFormat)
 			if err != nil {
+				_ = state.Runtime.ApplyFeedback(context.Background(), lease, feedbackForError(err))
 				return nil, err
 			}
 			if output.ChatValue != "" {
