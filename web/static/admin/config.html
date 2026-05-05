@@ -473,6 +473,13 @@ const SCHEMA_DEF = [
         ]
       },
       {
+        title: '账号选择策略', titleKey: 'config.schema.groups.accountSelection',
+        section: 'account.selection',
+        fields: [
+          { key: 'ignore_quota', label: '忽略本地额度选号', labelKey: 'config.schema.fields.ignoreQuota.label', type: 'bool', desc: '开启后账号选择不再依赖本地 remaining 剩余额度；只要 SSO 状态可用就会继续使用，直到上游真实返回 429 后再持久化标记为限流中。', descKey: 'config.schema.fields.ignoreQuota.desc' },
+        ]
+      },
+      {
         title: '批量操作并发', titleKey: 'config.schema.groups.batchConcurrency',
         section: 'batch',
         fields: [

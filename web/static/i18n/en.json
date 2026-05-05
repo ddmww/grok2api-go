@@ -214,6 +214,7 @@
         "features": "Core Features",
         "mediaFormat": "Media Output",
         "refreshSchedule": "Quota Refresh",
+        "accountSelection": "Account Selection",
         "batchConcurrency": "Batch Concurrency",
         "egressProxy": "Egress Proxy",
         "clearance": "Cloudflare Clearance",
@@ -323,6 +324,10 @@
         "onDemandMinInterval": {
           "label": "Minimum On-Demand Refresh Interval (s)",
           "desc": "Throttle window for request-triggered refreshes such as 429 handling. Repeated triggers within the interval are coalesced into a single refresh."
+        },
+        "ignoreQuota": {
+          "label": "Ignore Local Quota for Selection",
+          "desc": "When enabled, account selection no longer depends on the local remaining quota. Any usable SSO continues to be selected until upstream returns a real 429, then it is persisted as rate limited."
         },
         "nsfwConcurrency": {
           "label": "NSFW Enablement Concurrency",

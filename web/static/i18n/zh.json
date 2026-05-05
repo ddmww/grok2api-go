@@ -214,6 +214,7 @@
         "features": "基本功能设置",
         "mediaFormat": "媒体返回格式",
         "refreshSchedule": "配额刷新调度",
+        "accountSelection": "账号选择策略",
         "batchConcurrency": "批量操作并发",
         "egressProxy": "出站代理设置",
         "clearance": "Cloudflare Clearance",
@@ -323,6 +324,10 @@
         "onDemandMinInterval": {
           "label": "按需刷新最小间隔（秒）",
           "desc": "请求链路触发刷新（例如收到 429）时的节流间隔。N 秒内重复触发只执行一次，避免批量打爆配额接口。"
+        },
+        "ignoreQuota": {
+          "label": "忽略本地额度选号",
+          "desc": "开启后账号选择不再依赖本地 remaining 剩余额度；只要 SSO 状态可用就会继续使用，直到上游真实返回 429 后再持久化标记为限流中。"
         },
         "nsfwConcurrency": {
           "label": "开启 NSFW 并发数",
